@@ -1,0 +1,22 @@
+# Evidence loop for the todo-api example.
+# Run:  python3 -m evidence_loop.loop --config examples/todo-api/.evidence.toml --cwd examples/todo-api
+goal = """
+All tests in tests/test_store.py pass. Implement the three gaps marked in
+src/todo_api/store.py: input validation on add(), a NotFound domain error instead of a bare
+KeyError, and a delete() method. Do not modify the tests.
+"""
+
+[[checks]]
+name = "tests"
+# src/ layout: pytest needs the package importable. `-p no:cacheprovider` keeps the
+# example repo clean between runs.
+cmd  = ["python3", "-m", "pytest", "tests/", "-q", "-p", "no:cacheprovider", "--import-mode=importlib"]
+env  = { PYTHONPATH = "src" }
+
+[agent]
+# Swap for ["codex","exec","{feedback}"] / ["grok","-p","{feedback}"] / ["gemini","-p","{feedback}"]
+cmd = ["claude", "-p", "{feedback}"]
+
+[limits]
+max_attempts = 4
+timeout_sec  = 600

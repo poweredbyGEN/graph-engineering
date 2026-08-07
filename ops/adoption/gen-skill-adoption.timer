@@ -1,0 +1,14 @@
+[Unit]
+Description=Run the skill adoption report weekly
+
+[Timer]
+# Monday 09:00 local — a week's worth of work behind it, and early enough that a stale
+# trigger gets fixed at the start of the week rather than noticed at the end.
+OnCalendar=Mon *-*-* 09:00:00
+# A missed week (box down) runs on the next boot rather than silently skipping — a gap in
+# adoption data is exactly what this exists to prevent.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

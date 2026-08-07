@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""Nightly Graphify sweep — refresh graphs for repos the deploy reconciler never sees.
+
+WHY THIS EXISTS (2026-08-07)
+`gen-graphify-postdeploy` refreshes a graph when a repo DEPLOYS. That covers the hot
+serving repos and nothing else: an audit found 26 of 34 repos with commits in the last 30
+days had no graph at all, including the two most active in the fleet. A repo that is never
+deployed -- infra, tooling, docs, a service that ships by another path -- would never get a
+graph no matter how much it changed, and every agent following "graph before grep" would
+silently fall back to grep or, worse, read a graph built months ago.
+
+This runs at 22:00 local, off the deploy path entirely, so a slow rebuild competes with
+nobody and cannot delay a hotfix.
+
+DESIGN NOTES
+  - Discovery, not a hardcoded list. The reconciler's fixed 8-repo dict is exactly why
+    those 26 repos were invisible. Any repo under PROJECTS with recent commits enrolls
+    itself; no code change needed when a repo is created.
+  - Deduplicated by REMOTE, not by directory. aura-executor and aura-automation-service
+    are two checkouts of one GitHub repo -- keying on path would build the same graph
+    twice and race on the same output.
+  - Skips repos the reconciler already owns, so the two never fight over one graph.
+  - Sequential, never parallel. Rebuilds are CPU- and IO-heavy; the whole point of the
+    10% slice is that indexing never competes with a foreground agent.
+  - Refuses to start below MIN_FREE_GB. A graph build that fills the disk takes the box
+    down with it, and /mnt/data was at 84% when this was written.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import pathlib
+import shutil
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import site_config  # noqa: E402
+
+PROJECTS = site_config.path("paths", "projects", "AGENT_INFRA_PROJECTS")
+STATE = pathlib.Path(os.environ.get("GEN_GRAPHIFY_NIGHTLY_STATE", "/var/lib/gen-graphify/nightly.json"))
+LOG = pathlib.Path(os.environ.get("GEN_GRAPHIFY_NIGHTLY_LOG", "/var/log/gen-graphify-nightly.log"))
+
+# A repo with no recent commits does not need a nightly rebuild; its graph is still true.
+MIN_COMMITS_30D = int(site_config.get("graph", "min_commits_30d", "GEN_GRAPHIFY_MIN_COMMITS"))
+# Don't rebuild a graph that is already newer than this, even if the repo is active.
+MAX_GRAPH_AGE_HOURS = int(site_config.get("graph", "max_graph_age_hours", "GEN_GRAPHIFY_MAX_AGE_HOURS"))
+# Per-repo ceiling. A single pathological repo must not eat the whole night.
+BUILD_TIMEOUT = int(site_config.get("limits", "build_timeout_sec", "GEN_GRAPHIFY_BUILD_TIMEOUT"))
+# Whole-sweep ceiling, so the sweep is always finished long before the workday.
+SWEEP_BUDGET = int(site_config.get("limits", "sweep_budget_sec", "GEN_GRAPHIFY_SWEEP_BUDGET"))
+# Never start a build with less headroom than this. /mnt/data sat at 84% when written.
+MIN_FREE_GB = int(site_config.get("limits", "min_free_gb", "GEN_GRAPHIFY_MIN_FREE_GB"))
+# Same ceiling the reconciler uses; see its shrink-guard comment for the reasoning.
+MAX_AUTO_FORCE_SHRINK = int(site_config.get("graph", "max_auto_force_shrink", "GEN_GRAPHIFY_MAX_AUTO_FORCE_SHRINK"))
+
+# Repos whose graphs are maintained by some OTHER process (a deploy hook, CI). Rebuilding
+# them here would duplicate work and let two processes write one graphify-out concurrently.
+# Site-specific, so it comes from config -- an empty default means "nothing is externally
+# managed", which is correct for a fresh install and wrong for nobody.
+RECONCILER_REMOTES = set(site_config.get("graph", "externally_managed",
+                                        "AGENT_INFRA_EXTERNALLY_MANAGED"))
+
+
+def log(msg: str) -> None:
+    line = f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')} {msg}\n"
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    with LOG.open("a", encoding="utf-8") as fh:
+        fh.write(line)
+    print(line, end="", flush=True)
+
+
+def sh(args: list[str], cwd: pathlib.Path | None = None, timeout: int = 60) -> tuple[int, str]:
+    try:
+        p = subprocess.run(args, cwd=cwd, text=True, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, timeout=timeout, check=False)
+        return p.returncode, p.stdout or ""
+    except subprocess.TimeoutExpired:
+        return -1, f"TIMEOUT after {timeout}s"
+    except Exception as exc:  # noqa: BLE001
+        return -2, str(exc)
+
+
+def normalize_remote(url: str) -> str | None:
+    """github.com/Org/Repo(.git) -> 'Org/Repo'. Identity for dedup, so two checkouts of
+    one repo collapse to a single entry instead of racing on the same graph."""
+    url = url.strip()
+    if not url:
+        return None
+    for prefix in ("https://github.com/", "git@github.com:", "ssh://git@github.com/"):
+        if url.startswith(prefix):
+            slug = url[len(prefix):]
+            break
+    else:
+        return None
+    return slug[:-4] if slug.endswith(".git") else slug
+
+
+def free_gb(path: pathlib.Path) -> float:
+    st = shutil.disk_usage(path)
+    return st.free / (1024 ** 3)
+
+
+def graph_age_hours(repo: pathlib.Path) -> float | None:
+    g = repo / "graphify-out" / "graph.json"
+    if not g.exists():
+        return None
+    return (time.time() - g.stat().st_mtime) / 3600
+
+
+def discover() -> list[tuple[str, pathlib.Path, int]]:
+    """-> [(remote_slug, path, commits30d)], one entry per REMOTE, most active first."""
+    found: dict[str, tuple[pathlib.Path, int]] = {}
+    for entry in sorted(PROJECTS.iterdir()):
+        # A worktree's .git is a FILE (gitlink). Only real checkouts get graphed --
+        # a worktree shares history and would duplicate its parent's graph.
+        if not (entry / ".git").is_dir():
+            continue
+        rc, out = sh(["git", "-C", str(entry), "remote", "get-url", "origin"], timeout=15)
+        if rc != 0:
+            continue
+        slug = normalize_remote(out)
+        if not slug or slug in RECONCILER_REMOTES:
+            continue
+        rc, out = sh(["git", "-C", str(entry), "log", "--since=30 days ago", "--oneline"], timeout=60)
+        if rc != 0:
+            continue
+        commits = len([x for x in out.splitlines() if x.strip()])
+        if commits < MIN_COMMITS_30D:
+            continue
+        # Two checkouts of one remote: keep the more active one.
+        prev = found.get(slug)
+        if prev is None or commits > prev[1]:
+            found[slug] = (entry, commits)
+    return sorted(((s, p, c) for s, (p, c) in found.items()), key=lambda x: -x[2])
+
+
+def build(path: pathlib.Path) -> tuple[bool, str]:
+    """Rebuild one graph. Mirrors the reconciler's shrink-guard handling: a small net node
+    drop is code movement (node IDs embed line numbers) and is safe to force; a large drop
+    is the truncation the guard exists to catch and must stay failed."""
+    args = ["graphify", "update", str(path), "--no-cluster"]
+    rc, out = sh(args, cwd=path, timeout=BUILD_TIMEOUT)
+    if rc == 0:
+        return True, out
+    if "Refusing to overwrite" in out and "new graph has" in out:
+        import re
+        m = re.search(r"new graph has (\d+) nodes but existing\s+graph\.json has (\d+)", out)
+        if m:
+            shrink = int(m.group(2)) - int(m.group(1))
+            if 0 < shrink <= MAX_AUTO_FORCE_SHRINK:
+                log(f"  shrink-guard: net -{shrink} nodes (code movement) -- retrying --force")
+                rc, out = sh(args + ["--force"], cwd=path, timeout=BUILD_TIMEOUT)
+                return rc == 0, out
+            log(f"  shrink-guard: net -{shrink} nodes ABOVE the {MAX_AUTO_FORCE_SHRINK} "
+                f"ceiling -- NOT forcing (this is the data-loss case the guard is for)")
+    return False, out
+
+
+def main() -> int:
+    started = time.monotonic()
+    log("=== nightly graphify sweep starting ===")
+
+    if free_gb(PROJECTS) < MIN_FREE_GB:
+        log(f"ABORT: only {free_gb(PROJECTS):.1f}G free, need {MIN_FREE_GB}G. "
+            f"A graph build that fills the disk takes the box with it.")
+        return 1
+
+    repos = discover()
+    log(f"discovered {len(repos)} active repo(s) not owned by the deploy reconciler")
+
+    results = {"built": [], "skipped_fresh": [], "failed": [], "budget_stopped": []}
+    for slug, path, commits in repos:
+        if time.monotonic() - started > SWEEP_BUDGET:
+            log(f"sweep budget ({SWEEP_BUDGET}s) exhausted -- {slug} and the rest deferred")
+            results["budget_stopped"].append(slug)
+            continue
+
+        age = graph_age_hours(path)
+        if age is not None and age < MAX_GRAPH_AGE_HOURS:
+            log(f"skip {slug}: graph is {age:.1f}h old (< {MAX_GRAPH_AGE_HOURS}h)")
+            results["skipped_fresh"].append(slug)
+            continue
+        if free_gb(PROJECTS) < MIN_FREE_GB:
+            log(f"STOP: free space fell to {free_gb(PROJECTS):.1f}G mid-sweep")
+            results["budget_stopped"].append(slug)
+            continue
+
+        mode = "initial" if age is None else f"refresh ({age:.0f}h old)"
+        log(f"build {slug} [{commits} commits/30d] {mode}")
+        t0 = time.monotonic()
+        ok, out = build(path)
+        secs = time.monotonic() - t0
+        if ok:
+            log(f"  OK {slug} in {secs:.0f}s")
+            results["built"].append(slug)
+        else:
+            log(f"  FAILED {slug} in {secs:.0f}s: {out.strip()[-400:]}")
+            results["failed"].append(slug)
+
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    STATE.write_text(json.dumps({
+        "finished_at": time.time(),
+        "duration_sec": round(time.monotonic() - started),
+        **{k: v for k, v in results.items()},
+    }, indent=2), encoding="utf-8")
+
+    log(f"=== done in {time.monotonic() - started:.0f}s: "
+        f"{len(results['built'])} built, {len(results['skipped_fresh'])} fresh, "
+        f"{len(results['failed'])} failed, {len(results['budget_stopped'])} deferred ===")
+    # A failed repo is reported but is NOT a unit failure: one bad repo must not mark the
+    # whole nightly sweep red and hide that the other 20 succeeded.
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

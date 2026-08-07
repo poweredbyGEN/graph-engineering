@@ -1,0 +1,28 @@
+[Unit]
+Description=Nightly Graphify sweep for repos the deploy reconciler never sees
+Documentation=file:///usr/local/sbin/gen-graphify-nightly
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/gen-graphify-nightly
+
+# Same 10% ceiling as the post-deploy reconciler and the git-hook rebuilds. Indexing must
+# never compete with a foreground agent -- nice alone is a hint that caps nothing, and a
+# 34G rebuild previously held ~79% of a core for 20+ minutes at load 22 (2026-08-06).
+Slice=graphify-cap.slice
+CPUQuota=10%
+CPUWeight=1
+IOWeight=1
+Nice=19
+IOSchedulingClass=idle
+
+NoNewPrivileges=true
+ProtectSystem=full
+# Must include your configured paths.projects and paths.scratch.
+ReadWritePaths=/var/lib/gen-graphify /var/log
+
+# A single pathological repo must not run into the workday. The script keeps its own
+# 6h sweep budget; this is the backstop if it wedges below that.
+TimeoutStartSec=25200

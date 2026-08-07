@@ -1,0 +1,38 @@
+# .graphifyignore — what the CODE GRAPH must not index. Copy into a repo root and edit.
+#
+# WHY: graphify indexes the DISK, not git. Untracked local directories — worktrees, vendored
+# dist bundles, scratch dirs, data drops — become graph NODES. Measured on one fleet in
+# 2026-08: three heavily-used repos had agent-facing graphs that were MAJORITY scratch, the
+# worst at 76% of 99,877 nodes. In that repo `main()` resolved to NINE different source
+# roots, so asking the graph where a symbol lived returned several answers from several
+# copies of the same code with no signal which one ships.
+#
+# That is worse than a stale graph. Stale is old truth; this is confident fiction. And
+# recency HIDES it — a graph rebuilt an hour ago can still be 76% scratch.
+#
+# CRITICAL: graphify PREFERS this file and does NOT also read .gitignore when it exists
+# (detect.py: `if not ignore_file.exists()`). So reproduce your .gitignore entries here or
+# you will silently start indexing __pycache__, node_modules, and build output.
+#
+# Find what to add:  python3 ops/graphify/graphify-drift
+# It reports the untracked directories contributing nodes, largest first.
+
+# --- reproduce your .gitignore here (graphify will not read it separately) ---
+__pycache__/
+*.pyc
+node_modules/
+dist/
+build/
+.venv/
+venv/
+
+# --- untracked local scratch: verify each is 0 files tracked before adding ---
+# Check with:  git ls-files <dir> | head -1
+# A dir with tracked files is REAL SOURCE — excluding it silently deletes code from the
+# graph. On one repo `src/` and `static/` looked untracked but held build output, while
+# `ac-baseline/` was a full 24MB second copy of the repo. Only the second should be excluded.
+#
+# my-worktree/
+# vendored-dist/
+# scratch/
+# tmp/

@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Report drift between the two Graphify trees, and scratch contamination in either.
+
+WHY THIS EXISTS (2026-08-07)
+Graphs are built into TWO places and nothing compared them:
+
+  <paths.projects>/<repo>/graphify-out/       <- what agents are told to read
+  <paths.mirrors>/<org>__<repo>/graphify-out/ <- what an external rebuild process writes
+                                                 (optional; unset = one tree only)
+
+They had silently diverged by up to 14 days. One repo's agent-facing graph was 14 days
+behind the mirror that a deploy hook had been faithfully rebuilding, and nothing read it. Nothing detected it because BOTH files existed and BOTH looked fine -- a stale graph
+and a fresh one are byte-for-byte indistinguishable at the point of use, which is exactly
+what makes this worth a detector rather than a habit.
+
+It also reports SCRATCH CONTAMINATION. graphify indexes what is on disk, not what is in
+git, so untracked local directories become graph nodes: one repo's agent-facing graph got
+46% of its nodes from a single 24MB untracked scratch dir with zero files tracked. A node count is NOT a quality measure -- the bigger graph there was the worse one.
+
+Read-only. Reports; changes nothing.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import site_config  # noqa: E402
+
+PROJECTS = site_config.path("paths", "projects", "AGENT_INFRA_PROJECTS")
+# Optional second tree. None means "one tree only" -- the drift half of this report then has
+# nothing to compare and says so, rather than inventing a comparison.
+MIRRORS = site_config.path("paths", "mirrors", "AGENT_INFRA_MIRRORS")
+
+# Drift beyond this is worth acting on; below it, normal build cadence.
+STALE_HOURS = 48
+# Fraction of nodes from untracked paths above which the graph is misleading.
+CONTAMINATION_WARN = 0.10
+
+
+def graph_path(base: Path) -> Path:
+    return base / "graphify-out" / "graph.json"
+
+
+def load_nodes(p: Path) -> list[dict]:
+    try:
+        return json.loads(p.read_text(encoding="utf-8")).get("nodes", [])
+    except Exception:
+        return []
+
+
+def untracked_top_dirs(repo: Path) -> set[str]:
+    """Top-level dirs with NOTHING tracked by git -- local scratch graphify will index.
+
+    Checked per-directory rather than via `git status` because scratch dirs are often
+    listed in .gitignore, which hides them from status but not from graphify.
+    """
+    out: set[str] = set()
+    try:
+        for child in repo.iterdir():
+            if not child.is_dir() or child.name in {".git", "graphify-out"}:
+                continue
+            r = subprocess.run(["git", "-C", str(repo), "ls-files", child.name],
+                               capture_output=True, text=True, timeout=30)
+            if not r.stdout.strip():
+                out.add(child.name)
+    except Exception:
+        pass
+    return out
+
+
+def contamination(nodes: list[dict], scratch: set[str]) -> tuple[int, dict[str, int]]:
+    """How many nodes come from untracked scratch, and from which dirs."""
+    hits, by_dir = 0, {}
+    for n in nodes:
+        sf = str(n.get("source_file") or "")
+        top = sf.split("/")[0] if "/" in sf else sf
+        if top in scratch:
+            hits += 1
+            by_dir[top] = by_dir.get(top, 0) + 1
+    return hits, by_dir
+
+
+def mirror_for(repo_name: str) -> Path | None:
+    """Find the reconciler mirror for a project dir, matching on the repo half of
+    <org>__<repo>. The mirror is named after the REMOTE, which does not always match the
+    local directory name (e.g. a repo checked out under a different folder name)."""
+    if MIRRORS is None or not MIRRORS.is_dir():
+        return None
+    want = repo_name.lower()
+    for m in MIRRORS.iterdir():
+        if not m.is_dir() or "__" not in m.name:
+            continue
+        if m.name.split("__", 1)[1].lower() == want:
+            return m
+    return None
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Report Graphify tree drift and scratch contamination.")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--stale-hours", type=int, default=STALE_HOURS)
+    a = ap.parse_args()
+
+    rows = []
+    for repo in sorted(PROJECTS.iterdir()):
+        if not repo.is_dir() or not graph_path(repo).exists():
+            continue
+        agent_g = graph_path(repo)
+        agent_mtime = agent_g.stat().st_mtime
+        row = {
+            "repo": repo.name,
+            "agent_graph_age_h": round((time.time() - agent_mtime) / 3600, 1),
+            "mirror_graph_age_h": None,
+            "drift_h": None,
+        }
+
+        mirror = mirror_for(repo.name)
+        if mirror and graph_path(mirror).exists():
+            m_mtime = graph_path(mirror).stat().st_mtime
+            row["mirror_graph_age_h"] = round((time.time() - m_mtime) / 3600, 1)
+            row["drift_h"] = round((m_mtime - agent_mtime) / 3600, 1)
+
+        nodes = load_nodes(agent_g)
+        scratch = untracked_top_dirs(repo)
+        hits, by_dir = contamination(nodes, scratch)
+        row["nodes"] = len(nodes)
+        row["scratch_nodes"] = hits
+        row["scratch_pct"] = round(100 * hits / len(nodes), 1) if nodes else 0.0
+        row["scratch_dirs"] = dict(sorted(by_dir.items(), key=lambda x: -x[1])[:4])
+        rows.append(row)
+
+    if a.json:
+        print(json.dumps(rows, indent=2))
+        return 0
+
+    drifted = [r for r in rows if (r["drift_h"] or 0) > a.stale_hours]
+    dirty = [r for r in rows if r["scratch_pct"] >= CONTAMINATION_WARN * 100]
+
+    print("GRAPH DRIFT — the agent-facing graph vs what the reconciler built\n")
+    if drifted:
+        print(f"  {'repo':24} {'agent graph':>12} {'mirror':>10} {'behind by':>11}")
+        for r in sorted(drifted, key=lambda x: -(x["drift_h"] or 0)):
+            print(f"  {r['repo']:24} {r['agent_graph_age_h']:>10.0f}h "
+                  f"{r['mirror_graph_age_h']:>9.0f}h {r['drift_h']:>10.0f}h")
+        print("\n  → Agents read the FIRST column. The reconciler has been refreshing the")
+        print("    second. That work is invisible until the trees are reconciled.")
+    else:
+        print("  No tree is more than "
+              f"{a.stale_hours}h behind its mirror.")
+
+    print("\nSCRATCH CONTAMINATION — untracked local dirs indexed as real code\n")
+    if dirty:
+        for r in sorted(dirty, key=lambda x: -x["scratch_pct"]):
+            dirs = ", ".join(f"{k} ({v})" for k, v in r["scratch_dirs"].items())
+            print(f"  {r['repo']:24} {r['scratch_pct']:>5.1f}% of {r['nodes']} nodes — {dirs}")
+        print("\n  → graphify indexes the DISK, not git. A bigger graph can be the worse")
+        print("    graph: node count is not a quality measure.")
+    else:
+        print("  No graph is more than "
+              f"{CONTAMINATION_WARN:.0%} untracked-scratch nodes.")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

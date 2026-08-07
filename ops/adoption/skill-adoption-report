@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""skill-adoption-report — is the way of working actually being used?
+
+WHY THIS EXISTS (2026-08-07)
+Shipping a skill is not adoption. The baseline says 145 of 187 installed skills have NEVER
+been invoked (78%) -- and that is usually a DESCRIPTION problem, not a quality problem:
+skills are model-invoked, so they fire only when the description matches how someone
+naturally phrases the request. Without a periodic look, a skill that never fires is
+indistinguishable from one that fires constantly. Both just sit there.
+
+This wraps `skill-usage` (which mines transcripts -- nothing else records skill invocations)
+and adds the part that answers the question: WEEK-OVER-WEEK MOVEMENT for a watched set.
+
+A single week's count cannot tell you whether adoption happened. Zero in week one is
+expected for anything new. Zero in week three means the trigger is wrong.
+
+Read-only. Reports; changes nothing.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+# The transcript miner. Site-specific because nothing standard records skill invocations;
+# override when it lives elsewhere.
+SKILL_USAGE = Path(os.environ.get("AGENT_INFRA_SKILL_USAGE", "~/skill-usage")).expanduser()
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import site_config  # noqa: E402
+
+STATE = Path(os.environ.get("AGENT_INFRA_ADOPTION_STATE",
+                            "/var/lib/gen-skill-adoption/history.json"))
+
+# Skills whose adoption is being deliberately tracked. A skill enters this list when it
+# ships; it leaves when it is clearly established or clearly abandoned.
+WATCHED = site_config.get("adoption", "watched_skills", "AGENT_INFRA_WATCHED_SKILLS")
+
+# Weeks of zero invocations after which the trigger, not the tool, is the likely problem.
+# 1 is too eager (a skill can miss a quiet week); 3+ wastes a month before anyone looks.
+STALE_WEEKS = int(site_config.get("adoption", "stale_weeks"))
+
+
+def run_usage(args: list[str]) -> str:
+    try:
+        p = subprocess.run([sys.executable, str(SKILL_USAGE), *args],
+                           capture_output=True, text=True, timeout=600)
+        return p.stdout or ""
+    except Exception as exc:  # noqa: BLE001
+        return f"(skill-usage failed: {exc})"
+
+
+def parse_counts(text: str) -> dict[str, int]:
+    """Parse `NN  skill-name` lines. Ignores the header and the '(not in AI-Skills)' suffix."""
+    out: dict[str, int] = {}
+    for line in text.splitlines():
+        m = re.match(r"\s+(\d+)\s+(\S+)", line)
+        if m:
+            out[m.group(2)] = int(m.group(1))
+    return out
+
+
+def lifetime_counts() -> dict[str, int]:
+    """All-time invocation counts, from ONE full scan.
+
+    A zero week and a zero lifetime look identical in a windowed count but mean different
+    things: the first is a lapse, the second is a trigger that has never worked at all.
+
+    This used to call `skill-usage <name>` once PER watched skill, so a 4-skill list meant
+    5 full scans of 44k transcripts. Under the unit's 10% CPU quota that took >30min of wall
+    clock and hit TimeoutStartSec -- the report never produced output at all. One scan,
+    reused. The cap is the right call for background indexing; the fix is to stop doing the
+    same expensive work N times.
+    """
+    return parse_counts(run_usage([]))
+
+
+def load_history() -> list[dict]:
+    try:
+        return json.loads(STATE.read_text())
+    except Exception:
+        return []
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Weekly skill adoption report.")
+    ap.add_argument("--days", type=int, default=7)
+    ap.add_argument("--record", action="store_true",
+                    help="append this run to history (the timer passes this)")
+    a = ap.parse_args()
+
+    if not SKILL_USAGE.exists():
+        print(f"skill-usage not found at {SKILL_USAGE}", file=sys.stderr)
+        return 1
+
+    text = run_usage(["--days", str(a.days)])
+    counts = parse_counts(text)
+    total = sum(counts.values())
+
+    print(f"SKILL ADOPTION — last {a.days}d\n")
+    print(f"  {total} invocations across {len(counts)} skills\n")
+
+    if counts:
+        print("  most used:")
+        for name, c in sorted(counts.items(), key=lambda x: -x[1])[:8]:
+            print(f"    {c:5}  {name}")
+        print()
+
+    history = load_history()
+    prev = history[-1]["counts"] if history else {}
+    lifetime = lifetime_counts()   # one scan, reused for every watched skill
+
+    print("  WATCHED — did the practice land?")
+    for name in WATCHED:
+        now = counts.get(name, 0)
+        was = prev.get(name, 0)
+        delta = now - was
+        arrow = "→" if not history else ("↑" if delta > 0 else "↓" if delta < 0 else "=")
+        # Consecutive zero weeks, counted from history rather than re-derived, so a skill
+        # that fired once and went quiet is not treated the same as one that never fired.
+        zero_streak = 0
+        for h in reversed(history):
+            if h["counts"].get(name, 0) == 0:
+                zero_streak += 1
+            else:
+                break
+        if now == 0:
+            zero_streak += 1
+        flag = ""
+        if now == 0 and zero_streak > STALE_WEEKS:
+            flag = (f"  ⚠ {zero_streak} weeks at zero — the DESCRIPTION likely does not match "
+                    f"how people phrase this. Fix the trigger, not the tool.")
+        elif now == 0 and lifetime.get(name, 0) == 0:
+            # Distinguish "quiet week" from "never once, ever". A skill that has fired
+            # before and went quiet is a different problem from one that has never fired
+            # at all -- the second is a trigger that has never worked, not a lapse.
+            flag = "  (never invoked, lifetime — the trigger has never once matched)"
+        print(f"    {now:5}  {arrow} {name}{flag}")
+    print()
+
+    if not history:
+        print("  (first run — no prior week to compare. A zero here is expected for anything")
+        print("   newly shipped; what matters is whether it is still zero in two weeks.)")
+
+    if a.record:
+        STATE.parent.mkdir(parents=True, exist_ok=True)
+        history.append({"at": time.time(), "days": a.days, "counts": counts})
+        STATE.write_text(json.dumps(history[-52:], indent=2))  # keep a year
+        print(f"  recorded → {STATE}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

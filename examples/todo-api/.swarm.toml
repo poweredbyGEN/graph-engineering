@@ -1,0 +1,25 @@
+# Swarm over the same example: one lane per gap, each in its own worktree.
+# Run:  python3 -m swarm_run.swarm --config examples/todo-api/.swarm.toml --repo <this repo>
+base = "HEAD"
+
+[agent]
+cmd = ["claude", "-p", "In examples/todo-api, {task}. Run `PYTHONPATH=src python3 -m pytest tests/ -q` until it passes. Do not modify the tests."]
+
+[[checks]]
+name = "tests"
+cmd  = ["python3", "-c", "import subprocess,sys,os; e=dict(os.environ,PYTHONPATH='src'); sys.exit(subprocess.run(['python3','-m','pytest','tests/','-q'],cwd='examples/todo-api',env=e).returncode)"]
+
+[[lanes]]
+name = "todo-validation"
+task = "implement input validation in TodoStore.add() so empty/whitespace titles and titles over 500 chars raise ValueError, while exactly 500 chars is accepted"
+
+[[lanes]]
+name = "todo-notfound"
+task = "make TodoStore.get() and complete() raise the NotFound domain error instead of a bare KeyError"
+
+[[lanes]]
+name = "todo-delete"
+task = "add TodoStore.delete(todo_id) that raises NotFound for a missing id and never reuses ids after deletion"
+
+[limits]
+timeout_sec = 900

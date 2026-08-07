@@ -1,0 +1,31 @@
+[Unit]
+Description=Weekly skill adoption report — is the way of working actually used?
+Documentation=file:///opt/agent-infra/ops/adoption/skill-adoption-report
+
+[Service]
+Type=oneshot
+# Adjust the path if you installed elsewhere; see ops/README.md.
+ExecStart=/usr/bin/python3 /opt/agent-infra/ops/adoption/skill-adoption-report --days 7 --record
+StandardOutput=append:/var/log/gen-skill-adoption.log
+StandardError=append:/var/log/gen-skill-adoption.log
+
+# Scans ~44k transcripts. Cheap per-file (substring-gated before json.loads) but IO-heavy in
+# aggregate, so it runs at the same 10% ceiling as the graph rebuilds rather than competing
+# with a foreground agent.
+Slice=graphify-cap.slice
+CPUQuota=10%
+IOWeight=1
+Nice=19
+IOSchedulingClass=idle
+
+NoNewPrivileges=true
+ProtectSystem=full
+# StateDirectory creates /var/lib/gen-skill-adoption if absent AND grants write access.
+# ReadWritePaths alone fails at NAMESPACE setup when the dir does not exist yet (226).
+StateDirectory=gen-skill-adoption
+ReadWritePaths=/var/log
+# Two full 44k-transcript scans at CPUQuota=10%. The scan needs ~1min of CPU, but a 10%
+# quota stretches that to ~10min of WALL CLOCK -- the first version set 1800s against
+# CPU-time intuition and was killed at 30min having produced nothing. Budget wall clock,
+# not CPU, whenever a unit is quota-capped.
+TimeoutStartSec=5400

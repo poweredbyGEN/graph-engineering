@@ -1,0 +1,67 @@
+# agent-infra site configuration.
+#
+# Copy to `config.toml` (gitignored) and edit. Everything here was hardcoded until
+# 2026-08-07; the values below are the DEFAULTS the tools fall back to when no config file
+# exists, so a fresh clone still runs — it just will not know about your repos.
+#
+# Every setting can also be overridden by the environment variable named beside it, which is
+# what the systemd units use. Precedence: environment > config.toml > these defaults.
+
+[paths]
+# Where your git checkouts live. The nightly sweep discovers repos here.
+#   env: AGENT_INFRA_PROJECTS
+projects = "~/projects"
+
+# Scratch for logs and temp files. Point this at real disk, not a tmpfs — a graph build
+# writing hundreds of MB into RAM is how you take a box down.
+#   env: AGENT_INFRA_SCRATCH
+scratch = "/tmp"
+
+# Optional. A second tree of machine-owned mirrors, if something else (a deploy hook, CI)
+# rebuilds graphs outside your working checkouts. Leave empty if you have only one tree —
+# the drift report then simply has nothing to compare and says so.
+#   env: AGENT_INFRA_MIRRORS
+mirrors = ""
+
+[graph]
+# Repos whose graphs are maintained by some OTHER process, so the nightly sweep skips them.
+# Two processes writing one graphify-out can corrupt a graph that agents then trust.
+# Format: "<org>/<repo>", matched against the git remote — NOT the directory name, because
+# two checkouts of one repo must collapse to a single entry.
+#   env: AGENT_INFRA_EXTERNALLY_MANAGED (comma-separated)
+externally_managed = []
+
+# A repo with fewer commits than this in the last 30 days has a graph that is still true;
+# rebuilding it burns budget the active repos need.
+min_commits_30d = 5
+
+# Don't rebuild a graph newer than this, even for an active repo.
+max_graph_age_hours = 20
+
+# Largest net node reduction auto-retried with --force. Node IDs embed line numbers, so
+# moved code renames nodes rather than deleting them: a revert once produced 22 removed /
+# 20 added = net -2 and the shrink-guard read it as data loss. A LARGE drop is the
+# truncation that guard exists to catch and must still fail loudly.
+max_auto_force_shrink = 50
+
+[limits]
+# Refuse to start a graph build below this much free space. A build that fills the disk
+# takes the box down with it.
+min_free_gb = 25
+
+# Per-repo build ceiling. One pathological repo must not starve every other repo.
+build_timeout_sec = 1800
+
+# Whole-sweep ceiling. Sized so a sweep started at night is always done before the workday.
+sweep_budget_sec = 21600
+
+[adoption]
+# Skills whose adoption you are deliberately tracking. A skill enters this list when it
+# ships and leaves when it is clearly established or clearly abandoned.
+#   env: AGENT_INFRA_WATCHED_SKILLS (comma-separated)
+watched_skills = []
+
+# Weeks of zero invocations after which the TRIGGER, not the tool, is the likely problem.
+# Skills are model-invoked: they fire only when the description matches how someone actually
+# phrases a request, so a never-invoked skill is usually a description problem.
+stale_weeks = 2

@@ -1,0 +1,20 @@
+[Unit]
+Description=Run the nightly Graphify sweep at 22:00 local
+Documentation=file:///usr/local/sbin/gen-graphify-nightly
+
+[Timer]
+# 22:00 local (America/New_York on this box). Deliberately late: rebuilds are CPU/IO heavy
+# and the 10% slice makes them slow rather than loud, so they should land when no one is
+# waiting on the box.
+OnCalendar=*-*-* 22:00:00
+
+# A missed night (box down, reboot) runs on the next boot instead of silently skipping.
+# Without this, downtime turns into an unbounded gap in graph freshness that nothing
+# reports -- exactly the failure mode this sweep exists to close.
+Persistent=true
+
+# Stagger so the sweep never starts in lockstep with anything else scheduled on the hour.
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,54 @@
+# agent-infra's own evidence loop. This repo argues that work should stop on a command
+# rather than on a model's self-report; not gating itself would be the same "built it but
+# never turned it on" failure it exists to prevent.
+#
+# The docs check is here on purpose. An audit on 2026-08-07 found 6 of 9 test-count claims
+# in this repo's own markdown were WRONG (loops said 18, actual 23; traces 17, actual 53;
+# SETUP.md 51 total, actual 113). Every one was true when written and rotted silently as
+# tests were added. That is precisely the "prose degrades, code enforces" argument in the
+# README -- so the README's own numbers are now enforced by code.
+
+goal = """All four suites pass and every test-count claim in the markdown matches reality.
+Fix the cause, not the symptom. Do not delete or weaken a test to go green -- the suites
+are the evidence, and an agent that edits the evidence has removed the only thing that
+could have told it the truth."""
+
+[limits]
+max_attempts = 3
+timeout_sec = 900
+
+[agent]
+cmd = ["claude", "-p", "{feedback}"]
+
+[[checks]]
+name = "harness"
+cmd = ["python3", "-m", "pytest", "harness/servers/verify-mcp/tests/", "-q"]
+
+[[checks]]
+name = "loops"
+# Explicit path + PYTHONPATH. `cwd` is the repo root for every check, so a bare `tests/`
+# resolves to a directory that does not exist -- pytest then reports "no tests ran" and
+# exits non-zero, which LOOKS like a failing suite. Had it exited 0 instead, this config
+# would have passed while testing nothing.
+cmd = ["python3", "-m", "pytest", "loops/tests/", "-q"]
+env = { PYTHONPATH = "loops" }
+
+[[checks]]
+name = "swarm"
+cmd = ["python3", "-m", "pytest", "swarm/tests/", "-q"]
+env = { PYTHONPATH = "swarm" }
+
+[[checks]]
+name = "traces"
+cmd = ["python3", "-m", "pytest", "traces/tests/", "-q"]
+env = { PYTHONPATH = "traces" }
+
+[[checks]]
+name = "ops"
+cmd = ["python3", "-m", "pytest", "ops/tests/", "-q"]
+
+# Not a test suite -- an assertion that the DOCS still describe the code. Cheap, and it is
+# the check most likely to actually fire, because prose rots faster than code.
+[[checks]]
+name = "docs-accurate"
+cmd = ["python3", "ops/check-docs-accurate.py"]
