@@ -90,6 +90,24 @@ not only a working-tree scan.
 
 ## Current baseline
 
+### Foundation status (2026-08-08)
+
+The public foundation is landed on `main`:
+
+- the GitHub repository is now `poweredbyGEN/graph-engineering`, with the former URL redirecting;
+- the portable `graph-engineering` skill is validated and shared through the canonical skill tree;
+- the superseded `graph-dev` skill is retired after its useful scheduling and evidence rules were
+  incorporated;
+- `graph-task` and `graph-verify` are registered for Claude Code, Codex, and Grok, with graph state
+  stored outside project source trees;
+- Woodpecker runs contracts, core-component tests, and `verify-mcp` tests as three independent
+  workflows, and the launch merge passed all three on its exact `main` SHA;
+- the `universal-deploy` handoff is implemented in a focused shared-skills PR, but remains unmerged
+  until that repository provides a terminal-green exact-SHA gate.
+
+This is the control-plane foundation, not the finished runtime. The next executable product work is
+M1 and M2 in parallel: the installable CLI/doctor and the portable workflow contract/validator.
+
 The repository already has tested implementations for:
 
 - a read-only MCP 2.0 verification server;
@@ -119,10 +137,11 @@ one of 126 tests and reported eight high-severity dependency vulnerabilities; th
 `agentralabs/agentic-workflow` documents MCP/shell step runners as planned despite its broad tool
 surface. Their useful schema and routing ideas remain design inputs, not installed control planes.
 
-The graph layer is not yet executable. `produces` and `consumes` are currently trace metadata:
+The portable graph runtime is not yet executable. `produces` and `consumes` are currently trace metadata:
 they do not schedule consumers after producers or transfer artifacts between worktrees. There is
-also no root package, stable CLI, durable run store, mixed-engine run, CI pipeline, release
-process, or clean-machine installation path.
+also no root package, stable CLI, durable run store, mixed-engine run, release process, or
+clean-machine installation path. The repository now has a parallel Woodpecker CI baseline; later
+milestones must extend it with package, conformance, integration, safety, and release gates.
 
 The public/private split is incomplete. The public tree still carries organization-specific
 service/unit names, filesystem locations, private-project examples, incident statistics, and
