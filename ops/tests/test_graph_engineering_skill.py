@@ -32,10 +32,13 @@ def test_unresolved_placeholder_fails(tmp_path):
 
 
 def test_broken_reference_fails(tmp_path):
-    # intent: progressive disclosure is only useful when the referenced contract exists.
-    skill = copy_skill(tmp_path)
-    (skill / "references" / "patterns.md").unlink()
-    assert any("missing referenced file" in error for error in validate(skill))
+    # intent: progressive disclosure is only useful when every promised guide exists.
+    references = ("patterns.md", "runtime-guide.md", "extending.md")
+    for index, reference in enumerate(references):
+        skill = tmp_path / f"graph-engineering-{index}"
+        shutil.copytree(SOURCE, skill)
+        (skill / "references" / reference).unlink()
+        assert any(reference in error for error in validate(skill))
 
 
 def test_default_prompt_must_name_the_skill(tmp_path):

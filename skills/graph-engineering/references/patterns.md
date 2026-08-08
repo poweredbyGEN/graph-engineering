@@ -50,6 +50,39 @@ Use diverse verifier lenses rather than identical votes. A useful code finding m
 line or symbol, failure mechanism, and reproduction/check. Deterministically discard duplicates;
 use a model only for judgments that code cannot make.
 
+## Fleet supervision
+
+One orchestrator owns scheduling, integration, and the live-worker ledger. For every node record
+its state (`pending`, `ready`, `claimed`, `running`, `succeeded`, `failed`, `uncertain`, or
+`cancelled`), attempt/generation, profile, worker/session or process ID, worktree, start/deadline,
+inputs, expected outputs, and receipt locations.
+
+Operate fan-out as a bounded control loop:
+
+1. Inspect the ledger and actual live processes before dispatch. Never start a second live attempt
+   for the same node, target, PR, ticket, or write scope.
+2. Compute the ready frontier from satisfied artifact edges, then dispatch as many distinct nodes
+   as the proven concurrency, rate, and workspace budgets allow.
+3. Persist the claim before launch. Bind the worker to the node, attempt/generation, exact base,
+   profile/capability digest, worktree, deadline, and expected output schema.
+4. Monitor all running nodes at a bounded interval. Renew valid leases, collect terminal output,
+   and report which nodes are running, blocked, retrying, or complete. Silence is not permission to
+   spawn a duplicate.
+5. On timeout or cancellation, stop the owned process group cooperatively, fence the attempt, and
+   reject any late result. An interrupted effect that is not replay-safe requires reconciliation.
+6. Validate schemas, digests, write scope, receipts, and deterministic checks before marking a node
+   successful or unlocking consumers. Count every fan-in's expected, received, failed, and missing
+   inputs.
+7. Retry only the failed node and descendants invalidated by its changed artifact. Preserve
+   unrelated successes and their worktrees. Stop on the configured attempt, no-progress, time, or
+   cost ceiling.
+8. Reap finished worker processes after output and receipts are durably captured. Preserve accepted
+   and failed worktrees according to project policy; process cleanup is not evidence deletion.
+
+The portable runtime owns this loop mechanically. With native subagent tools, maintain the same
+ledger explicitly, poll every dispatched worker, and state which fencing, lease, cancellation, and
+resume guarantees are only procedural.
+
 ## Converging discovery
 
 For unknown-size audits, use a bounded loop:

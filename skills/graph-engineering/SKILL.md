@@ -33,8 +33,11 @@ Before drawing nodes:
 2. Define the final artifact and the deterministic evidence required to accept it.
 3. Identify protected or externally visible actions. Graph execution never grants deployment,
    merge, messaging, credential, production-write, or destructive authority.
-4. If `graph-engineer doctor` exists, run it. If the runtime is unavailable, use the host's
-   subagent primitives but say which scheduler guarantees are not mechanically enforced.
+4. Choose the execution mode:
+   - **Portable runtime:** read [references/runtime-guide.md](references/runtime-guide.md) in full,
+     run `graph-engineer doctor`, then follow its start, status, resume, and handoff procedure.
+   - **Native fallback:** use the host's subagent primitives and state that fencing, durable resume,
+     schema-bound artifact transfer, and typed repair edges are not mechanically enforced.
 
 ## 3. Perform the dependency audit
 
@@ -55,9 +58,9 @@ Every node must have:
 - failure policy: required, optional, or quorum;
 - downstream consumers.
 
-Use [references/workflow-contract.md](references/workflow-contract.md) when writing a machine-readable
-workflow. Reject cycles, missing producers, ambiguous input bindings, unbounded fan-out/retries,
-and parallel writes without isolation before launching agents.
+Read [references/workflow-contract.md](references/workflow-contract.md) before writing or changing a
+machine-readable workflow. The CLI accepts JSON only. Reject cycles, missing producers, ambiguous
+input bindings, unbounded fan-out/retries, and parallel writes without isolation before launching.
 
 ## 4. Schedule the frontier
 
@@ -71,6 +74,10 @@ evidence.
 
 Prioritize the neck: ready nodes that unlock the most downstream work. Cap concurrency by actual
 independent targets, agent capacity, rate limits, and workspace safety—not an aspirational number.
+Follow the fleet-supervision procedure in
+[references/patterns.md](references/patterns.md): keep one orchestrator-owned ledger, prevent
+duplicate live attempts, monitor every claimed node, fence late workers, validate returned
+artifacts, and reap completed processes. Fan-out is not fire-and-forget.
 
 ## 5. Execute nodes with isolation
 
@@ -113,6 +120,9 @@ The final node integrates accepted changes and runs the combined project gate ag
 green lanes are not proof that their combination is green. Detect conflicts and interface drift
 before promotion; preserve failed work for diagnosis according to project policy.
 
+When an integration check has a known responsible producer, use an explicit typed repair route.
+Never infer a repair target from prose or replay a writer without an explicit replay-safe effect.
+
 See [references/patterns.md](references/patterns.md) for diamonds, routers, verified fan-out,
 converging discovery, and the canonical `dev-change` graph.
 
@@ -130,3 +140,14 @@ Report:
 
 Say whether the result is implemented, integrated, merged, deployed, and verified live. These are
 different states. Never call a plan, agent message, green lane, or open pull request “done.”
+
+## Reference routing
+
+- Read [references/runtime-guide.md](references/runtime-guide.md) for installation, private worker
+  profiles, starting a workflow, status/resume, MCP registration, and troubleshooting.
+- Read [references/workflow-contract.md](references/workflow-contract.md) before authoring workflow
+  JSON or changing node, edge, budget, effect, artifact, or repair contracts.
+- Read [references/patterns.md](references/patterns.md) when selecting topology or deciding between
+  a ready queue, streaming pipeline, barrier, router, verifier, cycle, or checkpoint.
+- Read [references/extending.md](references/extending.md) before changing this skill/runtime, adding
+  an agent adapter, creating an MCP service, or expanding a tool/capability surface.

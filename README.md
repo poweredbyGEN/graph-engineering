@@ -103,6 +103,28 @@ cross-host playbook: it cuts fake edges, isolates parallel writes, gates nodes o
 evidence, retries only invalidated work, and gives one orchestrator ownership of integration.
 It can also be invoked explicitly as `$graph-engineering` where the host supports named skills.
 
+## Design provenance
+
+This runtime is a clean-room implementation informed by several independent projects. We adopted
+contracts and tests selectively rather than merging skills or treating any repository as a
+drop-in engine:
+
+| Upstream | What we learned and changed |
+|---|---|
+| [reacher-z/GraphEngineering](https://github.com/reacher-z/GraphEngineering) | Keep the graph IR vendor-neutral and back it with cross-runtime conformance; add the durable scheduler and recovery guarantees its early runtime did not yet provide. |
+| [sciencemj/graph-engineering](https://github.com/sciencemj/graph-engineering) | Let the server own durable execution state, deterministic commands, and human-only checkpoints; replace its single in-flight cursor with a concurrent ready queue. |
+| [gwaghmar/graph](https://github.com/gwaghmar/graph) | Make installation and quality-gate reporting work across agent hosts; keep local cache/report UX separate from execution truth. |
+| [Oortonaut/task-graph-mcp](https://github.com/Oortonaut/task-graph-mcp) | Use typed dependencies, cycle tests, claims, locks, and fan-in conformance; strengthen claims with generations/fencing and require real evidence receipts rather than attachment presence. |
+| [RecursiveIntell/agent-graph-mcp](https://github.com/RecursiveIntell/agent-graph-mcp) | Separate evidence integrity from factual correctness, bind checkpoints to effects, and impose hard graph ceilings; reproduce useful behavior locally because the audited revision was not clean-clone buildable. |
+| [TeamSparkAI/mcpGraph](https://github.com/TeamSparkAI/mcpGraph) and [P0u4a/mcp-workflow](https://github.com/P0u4a/mcp-workflow) | Keep schema preflight, deterministic routing, activity lifecycle, and store interfaces; reject unrestricted transforms, sequential-only execution, and retries without effect safety. |
+| [Graph-tl/graph](https://github.com/Graph-tl/graph), [utilitydelta/mcp-graph-engine](https://github.com/utilitydelta/mcp-graph-engine), and [agentralabs/agentic-workflow](https://github.com/agentralabs/agentic-workflow) | Borrow ready-frontier ranking, graph analytics, failure classes, and quorum vocabulary; do not adopt non-atomic claims, broad knowledge-graph attack surfaces, or prepared-but-not-executed runtime facades. |
+
+[NOTICE.md](NOTICE.md) records exact reviewed revisions and licenses. The fuller adoption/rejection
+audit is in [ROADMAP.md](docs/ROADMAP.md). Before every minor release or major MCP/runtime redesign,
+and at least every 90 days while active, compare those pins with upstream heads and update the
+decision when new tests, security work, protocol support, or implementation evidence changes it.
+Never copy a new upstream behavior without attribution and a local regression plus sabotage test.
+
 ### This repo gates itself
 
 [`.evidence.toml`](.evidence.toml) runs all four component suites plus the docs check.

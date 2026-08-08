@@ -1,43 +1,70 @@
 # Workflow contract
 
-Use this contract when handing a graph to a scheduler. Omit fields the runner cannot enforce;
-never describe retries, isolation, schemas, or approvals as guarantees when they are only prose.
+Use this contract when handing a graph to a scheduler. The CLI accepts JSON only. Omit fields the
+runner cannot enforce; never describe retries, isolation, schemas, or approvals as guarantees when
+they are only prose.
 
-```yaml
-version: graph-engineering/v1alpha1
-id: dev-change
-goal: One sentence describing the accepted integrated artifact
-budgets:
-  max_nodes: 20
-  max_concurrency: 4
-  max_attempts_per_node: 2
-  max_total_attempts: 30
-  timeout_seconds: 1800
-nodes:
-  - id: implement_api
-    kind: agent
-    needs: [scope]
-    inputs:
-      contract: scope.contract
-    outputs:
-      change:
-        schema: schemas/change.json
-    engine: codex
-    model_tier: standard
-    permission: write
-    workspace: worktree
-    write_scope: [src/api/**, tests/api/**]
-    verify_cmd: [pytest, -q, tests/api]
-    timeout_seconds: 600
-    max_attempts: 2
-    required: true
-  - id: integrate
-    kind: integration
-    needs: [implement_api, implement_ui, verify_changes]
-    verify_cmd: [pytest, -q]
-outputs:
-  result: integrate.result
+This minimal read-only diamond is directly valid workflow JSON:
+
+```json
+{
+  "version": "graph-engineering/v1alpha1",
+  "id": "parallel_audit",
+  "goal": "Audit two independent surfaces and synthesize a typed result",
+  "budgets": {
+    "max_nodes": 3,
+    "max_concurrency": 2,
+    "max_attempts_per_node": 2,
+    "max_total_attempts": 5,
+    "timeout_seconds": 900
+  },
+  "nodes": [
+    {
+      "id": "audit_api",
+      "kind": "agent",
+      "task": "Audit the API surface and return findings.",
+      "needs": [],
+      "inputs": {},
+      "outputs": {"findings": {"schema": {"type": "object"}}},
+      "profile": "verification",
+      "workspace": "read-only",
+      "permission": "read",
+      "required": true
+    },
+    {
+      "id": "audit_config",
+      "kind": "agent",
+      "task": "Audit configuration boundaries and return findings.",
+      "needs": [],
+      "inputs": {},
+      "outputs": {"findings": {"schema": {"type": "object"}}},
+      "profile": "verification",
+      "workspace": "read-only",
+      "permission": "read",
+      "required": true
+    },
+    {
+      "id": "synthesize",
+      "kind": "agent",
+      "task": "Synthesize the two finding sets without inventing evidence.",
+      "needs": ["audit_api", "audit_config"],
+      "inputs": {
+        "api": "audit_api.findings",
+        "config": "audit_config.findings"
+      },
+      "outputs": {"report": {"schema": {"type": "object"}}},
+      "profile": "verification",
+      "workspace": "read-only",
+      "permission": "read",
+      "required": true
+    }
+  ],
+  "outputs": {"report": "synthesize.report"}
+}
 ```
+
+For writing nodes and integration, use the runtime's exact canonical changeset schema. Copy it from
+the tagged public `examples/repair-route.workflow.json`; do not shorten or reinterpret it.
 
 ## Required validation
 
