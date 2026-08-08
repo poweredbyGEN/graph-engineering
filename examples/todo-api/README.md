@@ -61,7 +61,7 @@ Three lanes, one per gap, each in its own git worktree:
 
 ```bash
 cd swarm
-python3 -m swarm_run.swarm --config ../examples/todo-api/.swarm.toml --repo /path/to/agent-infra --dry-run
+python3 -m swarm_run.swarm --config ../examples/todo-api/.swarm.toml --repo /path/to/graph-engineering --dry-run
 ```
 
 This is the honest demonstration of when *not* to use a swarm: these three lanes all edit the

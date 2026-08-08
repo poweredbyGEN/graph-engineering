@@ -6,5 +6,9 @@ __pycache__/
 dist/
 build/
 
+# Local graph execution state. Workflow definitions belong in source; claims and runs do not.
+task-graph/
+.task-graph/
+
 # Site config — machine-specific paths and repo lists. Never committed.
 config.toml

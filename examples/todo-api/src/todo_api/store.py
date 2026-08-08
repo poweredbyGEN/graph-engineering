@@ -1,6 +1,6 @@
 """An in-memory todo store — deliberately incomplete.
 
-This is the worked example for agent-infra. Three capabilities are MISSING on purpose, each
+This is the worked example for graph-engineering. Three capabilities are MISSING on purpose, each
 with a failing test that describes what it should do. Point an agent at it and the evidence
 loop decides when the work is actually finished.
 

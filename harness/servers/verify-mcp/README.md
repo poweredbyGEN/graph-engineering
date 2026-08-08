@@ -30,7 +30,8 @@ Requires Python 3.11+. Use a virtualenv: `mcp>=2` is a **breaking change** from 
 `pip install mcp` now pulls 2.x, so a global install can break existing MCP projects.
 
 ```bash
-git clone <this-repo> && cd agent-infra/servers/verify-mcp
+git clone https://github.com/poweredbyGEN/graph-engineering.git
+cd graph-engineering/harness/servers/verify-mcp
 uv venv && uv pip install -e ".[dev]"
 uv run pytest -q          # 16 tests, no network
 ```

@@ -1,4 +1,4 @@
-# agent-infra site configuration.
+# graph-engineering site configuration.
 #
 # Copy to `config.toml` (gitignored) and edit. Everything here was hardcoded until
 # 2026-08-07; the values below are the DEFAULTS the tools fall back to when no config file

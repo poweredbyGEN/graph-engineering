@@ -8,7 +8,7 @@ metadata:
 
 # Evidence loop — the model saying "done" is not a stop condition
 
-Repo: wherever you cloned `agent-infra` (this doc assumes `~/projects/agent-infra`).
+Repo: wherever you cloned `graph-engineering` (this doc assumes `~/projects/graph-engineering`).
 
 The default agent loop stops when the model reports it is finished. That is a self-report,
 and it is the single most common source of *"it looked done but wasn't."* This runner moves
@@ -32,7 +32,7 @@ are the stop condition, every run, forever.
 Skipping to automation is how you get an expensive loop that never worked.
 
 ```bash
-cd ~/projects/agent-infra/loops
+cd ~/projects/graph-engineering/loops
 
 # 1. LOOK FIRST — gathers evidence, never runs the agent
 python3 -m evidence_loop.loop --config .evidence.toml --cwd <repo> --check-only
@@ -71,7 +71,7 @@ and any CLI. Note `codex exec`, not `codex -p` (`-p` selects a profile).
 ## After ~5 runs — is it earning its cost?
 
 ```bash
-cd ~/projects/agent-infra/traces
+cd ~/projects/graph-engineering/traces
 python3 -m trace_analyze.analyze <dir-of-traces>/
 ```
 
@@ -102,5 +102,5 @@ prompts that keep getting longer.
   calls checks itself. Skip if the loop already runs your checks.
 - **traces** — see above.
 
-Full docs: `~/projects/agent-infra/docs/SETUP.md`, `docs/AGENT-CLIS.md`. Worked example with
+Full docs: `~/projects/graph-engineering/docs/SETUP.md`, `docs/AGENT-CLIS.md`. Worked example with
 9 deliberately failing tests: `examples/todo-api/`.

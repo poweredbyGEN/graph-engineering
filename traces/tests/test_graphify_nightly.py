@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import os
 import subprocess
 import sys
 import tempfile
@@ -24,7 +25,8 @@ import pytest
 
 SWEEP = Path("/usr/local/sbin/gen-graphify-nightly")
 
-pytestmark = pytest.mark.skipif(not SWEEP.exists(), reason="nightly sweep not installed")
+if os.environ.get("GRAPH_ENGINEERING_PORTABLE_TESTS") == "1" or not SWEEP.exists():
+    pytest.skip("site-installed nightly sweep not available in portable suite", allow_module_level=True)
 
 
 def _load():
@@ -39,7 +41,7 @@ def _load():
 
 
 M = _load()
-M.LOG = Path(tempfile.gettempdir()) / "agent-infra-nightly-test.log"
+M.LOG = Path(tempfile.gettempdir()) / "graph-engineering-nightly-test.log"
 
 
 # --- remote normalisation: the identity used for dedup --------------------------------

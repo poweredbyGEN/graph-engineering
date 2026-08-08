@@ -1,0 +1,14 @@
+when:
+  - event: [push, pull_request]
+
+steps:
+  contracts:
+    image: python:3.13-slim
+    commands:
+      - apt-get update && apt-get install -y --no-install-recommends git
+      - pip install --disable-pip-version-check --no-cache-dir pytest
+      - python ops/check_graph_engineering_skill.py
+      - python ops/check-docs-accurate.py
+      - python -m pytest ops/tests -q
+
+concurrency: 1

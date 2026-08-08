@@ -1,0 +1,11 @@
+when:
+  - event: [push, pull_request]
+
+steps:
+  verify-mcp:
+    image: ghcr.io/astral-sh/uv:python3.13-bookworm
+    commands:
+      - cd harness/servers/verify-mcp
+      - uv run --extra dev pytest -q
+
+concurrency: 1

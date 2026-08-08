@@ -78,7 +78,7 @@ Absent that evidence it says so plainly: *"a graph would add rigidity without bu
 ## Testing
 
 ```bash
-python3 -m pytest tests/ -q     # 53 tests
+GRAPH_ENGINEERING_PORTABLE_TESTS=1 python3 -m pytest tests/ -q  # 27 tests
 ```
 
 Sabotage-checked on all three verdict mechanisms — labelling a dead check healthy, counting a

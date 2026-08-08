@@ -19,6 +19,7 @@ functions this file imports directly from the installed script.
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -27,9 +28,8 @@ import pytest
 
 RECONCILER = Path("/usr/local/sbin/gen-graphify-postdeploy")
 
-pytestmark = pytest.mark.skipif(
-    not RECONCILER.exists(), reason="reconciler not installed on this host"
-)
+if os.environ.get("GRAPH_ENGINEERING_PORTABLE_TESTS") == "1" or not RECONCILER.exists():
+    pytest.skip("site-installed reconciler not available in portable suite", allow_module_level=True)
 
 
 def _load():
@@ -52,7 +52,7 @@ M = _load()
 # a test asserting on failure handling must not write to a PRODUCTION ops log -- doing so
 # put fake "command failed" lines into the real incident log on first run. Redirect to a
 # temp path for the whole session.
-_TEST_LOG = Path(tempfile.gettempdir()) / "agent-infra-reconciler-test.log"
+_TEST_LOG = Path(tempfile.gettempdir()) / "graph-engineering-reconciler-test.log"
 _TEST_LOG.parent.mkdir(parents=True, exist_ok=True)
 M.LOG = _TEST_LOG
 

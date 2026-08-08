@@ -1,6 +1,6 @@
-# agent-infra
+# graph-engineering
 
-**Tools and practices for building software with agents.**
+**Portable, evidence-gated graph development for Claude, Codex, Grok, and Gemini.**
 
 An agent's reliability is mostly a property of its **harness** — the tools, state, permissions,
 and observability around the model — not of the model itself. When an agent "can't do the job",
@@ -66,16 +66,18 @@ answers faster. Lanes must be independent and each must prove it finished.
 
 | Component | What it does | Status |
 |---|---|---|
-| [`traces/`](traces) | Reads `--trace` JSON from both runners; grades every check (EARNING / NO SIGNAL / BROKEN…), flags stuck vs budget-exhausted runs, and detects coupled lanes. | ✅ 53 tests, sabotage-checked |
+| [`traces/`](traces) | Reads `--trace` JSON from both runners; grades every check (EARNING / NO SIGNAL / BROKEN…), flags stuck vs budget-exhausted runs, and detects coupled lanes. | ✅ 27 portable tests + 26 site integration tests |
 
 The finding that matters: **a check that has never failed is not evidence.** Run it against your
 own traces and see how many of your checks have never caught anything.
 
 ### Graph
 
-**[`graph/`](graph)** is deliberately empty, and that is a measured result rather than a
-deferral: `trace-analyze` has found no real dependencies in any run recorded so far, so a
-graph would buy rigidity in exchange for nothing.
+**[`graph/`](graph)** does not yet contain the executable scheduler. The first portable graph
+contract, runtime, and MCP control-plane work is tracked in the [build roadmap](docs/ROADMAP.md).
+Until that runtime lands, the `graph-engineering` skill applies the same dependency audit and
+evidence gates through each host's native subagent primitives, and reports which guarantees are
+procedural rather than mechanically enforced.
 
 Lanes declare `produces`/`consumes`, so the **fake edge test** — *does A's output actually
 flow into B?* — is computed rather than argued. Correlated outcomes are only a hint; two
@@ -93,15 +95,17 @@ The counts in this README are now enforced by a check rather than by memory.
 
 ### Skills
 
-*situation* (about to declare something done; about to trust a graph answer) rather than on
-a phrasing someone has to remember. 145 of 187 installed skills on the origin machine had
-never fired once; that is almost always a description problem, not a quality one.
+**[`skills/`](skills)** — `graph-engineering` and `evidence-loop`, written so
+they trigger on the *situation* rather than on a magic phrase. `graph-engineering` is the
+cross-host playbook: it cuts fake edges, isolates parallel writes, gates nodes on deterministic
+evidence, retries only invalidated work, and gives one orchestrator ownership of integration.
+It can also be invoked explicitly as `$graph-engineering` where the host supports named skills.
 
 ### This repo gates itself
 
-[`.evidence.toml`](.evidence.toml) runs all four suites plus the docs check. A repo arguing
-for evidence-gated work that did not gate itself would be the "built it but never turned it
-on" failure it exists to prevent.
+[`.evidence.toml`](.evidence.toml) runs all four component suites plus the docs check.
+[`.woodpecker/ci.yml`](.woodpecker/ci.yml) runs the skill contract, documentation accuracy,
+component suites, and MCP server tests on every push and pull request.
 
 ```bash
 cd loops && python3 -m evidence_loop.loop --config ../.evidence.toml --cwd .. --check-only
@@ -133,7 +137,8 @@ prompt) and cross-model adversarial verification.
 ## Quickstart
 
 ```bash
-git clone <this-repo> && cd agent-infra/harness/servers/verify-mcp
+git clone https://github.com/poweredbyGEN/graph-engineering.git
+cd graph-engineering/harness/servers/verify-mcp
 uv venv && uv pip install -e ".[dev]"
 uv run pytest -q
 

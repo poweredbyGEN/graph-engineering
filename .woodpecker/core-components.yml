@@ -1,0 +1,12 @@
+when:
+  - event: [push, pull_request]
+
+steps:
+  core-components:
+    image: python:3.13-slim
+    commands:
+      - apt-get update && apt-get install -y --no-install-recommends git
+      - pip install --disable-pip-version-check --no-cache-dir pytest
+      - python -m pytest loops/tests swarm/tests traces/tests -q
+
+concurrency: 1

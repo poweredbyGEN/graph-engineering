@@ -126,9 +126,11 @@ Detail: [`swarm/README.md`](../swarm/README.md).
 
 ---
 
-## Step 5 — Graph: probably not yet
+## Step 5 — Graph: use it when the dependencies are real
 
-There is no graph runner here on purpose.
+The executable portable graph runner is still being built. The `graph-engineering` skill can
+already plan and execute through native host subagents, while making clear which scheduling and
+recovery guarantees are not yet enforced by code.
 
 Promote work to an explicit graph only when traces show real branching, joins that must
 synchronize, or human approval gates — and only after you have those traces. A graph drawn
@@ -145,11 +147,13 @@ the branching is real.
 cd harness/servers/verify-mcp && uv run pytest -q    # 16
 cd ../../../loops && python3 -m pytest tests/ -q     # 23
 cd ../swarm && python3 -m pytest tests/ -q           # 21
-cd ../traces && python3 -m pytest tests/ -q          # 53
-cd ../ops    && python3 -m pytest tests/ -q          # 8
+cd ../traces && GRAPH_ENGINEERING_PORTABLE_TESTS=1 python3 -m pytest tests/ -q  # 27
+cd ../ops    && python3 -m pytest tests/ -q          # 14
 ```
 
-121 tests, no network, no API keys. If they pass, the machinery works — what remains is whether
+101 portable tests, no network, no API keys. Hosts with the installed Graphify reconciler and
+nightly sweep run another 26 site integration tests. If the portable tests pass, the machinery
+works — what remains is whether
 *your* checks are meaningful, which only `--check-only` on a repo you understand will tell you.
 
 These counts are themselves checked: `python3 ops/check-docs-accurate.py` fails if any

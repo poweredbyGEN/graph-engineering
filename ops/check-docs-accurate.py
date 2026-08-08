@@ -27,6 +27,7 @@ Read-only. Reports; changes nothing.
 from __future__ import annotations
 
 import re
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -56,11 +57,14 @@ BARE_CLAIM = re.compile(r"pytest\b.*#\s*(\d+)\s*$")
 
 def collected(suite: str) -> int | None:
     """How many tests the suite ACTUALLY has, via pytest --collect-only (no execution)."""
+    env = os.environ | {"GRAPH_ENGINEERING_PORTABLE_TESTS": "1"}
     try:
         p = subprocess.run(
             [sys.executable, "-m", "pytest", "tests/", "-q", "--collect-only"],
-            cwd=ROOT / suite, capture_output=True, text=True, timeout=300)
+            cwd=ROOT / suite, capture_output=True, text=True, timeout=300, env=env)
     except Exception:
+        return None
+    if p.returncode != 0:
         return None
     m = re.search(r"(\d+) tests? collected", p.stdout)
     return int(m.group(1)) if m else None
