@@ -70,3 +70,32 @@ Do not replace failure with `null`. Preserve at least:
 
 Fan-in must see successful, failed, skipped, and cancelled settlements so it can distinguish a
 complete result from silent loss.
+
+## Typed repair edge
+
+A combined integration failure is not permission to retry the graph. Declare a route from exact
+deterministic check IDs to exact producer nodes and input names:
+
+```yaml
+repair:
+  routes:
+    - id: combined_to_api
+      check_ids: [combined]
+      targets:
+        - node: implement_api
+          input: integration_failure
+      max_rounds: 1
+      no_progress_limit: 1
+```
+
+The target must be a required writing agent that directly supplies a changeset to that integration
+and has no other downstream consumer that would be silently invalidated. Its retry budget and the
+integration retry budget must cover the initial attempt plus declared repair rounds; the workflow
+total must cover the complete worst case. Destructive and non-idempotent targets are rejected:
+repair routing does not grant authority to repeat an effect that may already have occurred.
+
+The runtime supplies `integration_failure` as a fixed typed artifact with `code`,
+`integration_node`, `integration_attempt`, `check_id`, bounded `evidence`, and
+`failure_digest`. It invalidates only declared targets, preserves unrelated producer artifacts,
+and rebuilds integration. Unknown checks, ambiguous routes, non-check failures, exhausted budgets,
+and repeated identical failure digests stop without an inferred target.

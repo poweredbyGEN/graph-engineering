@@ -1,0 +1,14 @@
+when:
+  - event: [push, pull_request]
+
+steps:
+  mcp2:
+    image: ghcr.io/astral-sh/uv:python3.13-bookworm
+    commands:
+      - uv sync --extra dev --locked
+      - uv run ruff format --check src/graph_engineering/mcp tests/test_mcp_protocol.py tests/test_mcp_store.py tests/test_mcp_skills.py
+      - uv run ruff check src/graph_engineering/mcp tests/test_mcp_protocol.py tests/test_mcp_store.py tests/test_mcp_skills.py
+      - uv run pytest -q tests/test_mcp_protocol.py tests/test_mcp_store.py tests/test_mcp_skills.py ops/tests/test_graph_task_mcp.py
+      - uv build
+
+concurrency: 1

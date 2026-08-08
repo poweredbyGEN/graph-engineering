@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/poweredbyGEN/graph-engineering/schemas/workflow-v1alpha1.schema.json",
+  "title": "graph-engineering workflow v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "id", "goal", "budgets", "nodes", "outputs"],
+  "properties": {
+    "version": {"const": "graph-engineering/v1alpha1"},
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+    "goal": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_nodes", "max_concurrency", "max_attempts_per_node", "max_total_attempts", "timeout_seconds"],
+      "properties": {
+        "max_nodes": {"type": "integer", "minimum": 1, "maximum": 1000},
+        "max_concurrency": {"type": "integer", "minimum": 1, "maximum": 100},
+        "max_attempts_per_node": {"type": "integer", "minimum": 1, "maximum": 20},
+        "max_total_attempts": {"type": "integer", "minimum": 1, "maximum": 10000},
+        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 604800}
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1000,
+      "items": {"$ref": "#/$defs/node"}
+    },
+    "outputs": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}\\.[a-z][a-z0-9_-]{0,63}$"}
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema"],
+      "properties": {
+        "schema": {"oneOf": [{"type": "object"}, {"type": "string", "minLength": 1}]},
+        "required": {"type": "boolean", "default": true}
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "argv"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+        "argv": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 86400}
+      }
+    },
+    "retry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_attempts": {"type": "integer", "minimum": 1, "maximum": 20},
+        "no_progress_limit": {"type": "integer", "minimum": 1, "maximum": 10}
+      }
+    },
+    "repairTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node", "input"],
+      "properties": {
+        "node": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+        "input": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}
+      }
+    },
+    "repairRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "check_ids", "targets", "max_rounds", "no_progress_limit"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+        "check_ids": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}
+        },
+        "targets": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/repairTarget"}
+        },
+        "max_rounds": {"type": "integer", "minimum": 1, "maximum": 10},
+        "no_progress_limit": {"type": "integer", "minimum": 1, "maximum": 10}
+      }
+    },
+    "repair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["routes"],
+      "properties": {
+        "routes": {
+          "type": "array", "minItems": 1, "maxItems": 20,
+          "items": {"$ref": "#/$defs/repairRoute"}
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "task", "needs", "inputs", "outputs", "workspace", "permission", "required"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+        "kind": {"enum": ["agent", "transform", "check", "approval", "integration"]},
+        "task": {"type": "string", "minLength": 1, "maxLength": 8000},
+        "needs": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "inputs": {"type": "object", "additionalProperties": {"type": "string"}},
+        "outputs": {"type": "object", "additionalProperties": {"$ref": "#/$defs/artifact"}},
+        "profile": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$"},
+        "model": {"type": "string", "minLength": 1},
+        "workspace": {"enum": ["read-only", "worktree", "shared"]},
+        "write_scope": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "permission": {"enum": ["read", "write", "external", "destructive"]},
+        "checks": {"type": "array", "items": {"$ref": "#/$defs/check"}},
+        "retry": {"$ref": "#/$defs/retry"},
+        "repair": {"$ref": "#/$defs/repair"},
+        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+        "required": {"type": "boolean"},
+        "approval": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+        "effect": {
+          "enum": ["none", "read", "idempotent_write", "non_idempotent_write"]
+        },
+        "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 256}
+      },
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "agent"}}}, "then": {"required": ["profile"]}},
+        {"if": {"properties": {"permission": {"enum": ["external", "destructive"]}}}, "then": {"required": ["approval", "effect"]}},
+        {"if": {"required": ["effect"], "properties": {"effect": {"const": "idempotent_write"}}}, "then": {"required": ["idempotency_key"]}}
+      ]
+    }
+  }
+}

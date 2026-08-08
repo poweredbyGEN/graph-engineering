@@ -88,6 +88,38 @@ variables, or a separately controlled private configuration repository. Examples
 projects and localhost-only endpoints. A history scan is required before every public release,
 not only a working-tree scan.
 
+### Portable profiles and private registrations
+
+Workflow files target capabilities, not a vendor account, machine, endpoint, or secret. The public
+repository defines a vendor-neutral `AgentProfileCapabilityManifest` contract containing only
+portable fields such as adapter kind, supported protocol versions, client capabilities and
+extensions, required tool classes, workspace/network policy, output modes, and model/resource
+limits. Public fixtures use fictional profile IDs and local fake servers.
+
+Actual profile selection belongs to ignored user or project configuration. Our private rollout
+intends to register Claude, Codex, Grok, Kimi K3, and GLM 5.2 profiles there; those names are local
+choices, not hard-coded workflow node types or public compatibility promises. The same private
+registry owns server IDs, transports, scoped authorization, trust tier, and references to locally
+managed credentials. It must never serialize an endpoint, credential reference, private server
+inventory, or organization policy into a workflow, trace, artifact, generated skill, or public
+example.
+
+Before dispatch, the planner computes an eligibility intersection:
+
+```text
+node requirements
+  ∩ adapter/client support
+  ∩ profile authorization
+  ∩ live server-negotiated capabilities
+  ∩ request- and tool-level support
+```
+
+It selects only an eligible profile, applies a declared deterministic fallback, or fails preflight.
+Every node lease and evidence receipt pins the chosen profile ID, adapter version, negotiated MCP
+protocol, server IDs, capability-manifest hash, and skill digests. A retry on another profile must
+negotiate and validate again; subagents never inherit the orchestrator's entire ambient MCP or
+private-server configuration.
+
 ## Current baseline
 
 ### Foundation status (2026-08-08)
@@ -102,11 +134,16 @@ The public foundation is landed on `main`:
   stored outside project source trees;
 - Woodpecker runs contracts, core-component tests, and `verify-mcp` tests as three independent
   workflows, and the launch merge passed all three on its exact `main` SHA;
-- the `universal-deploy` handoff is implemented in a focused shared-skills PR, but remains unmerged
-  until that repository provides a terminal-green exact-SHA gate.
+- the `universal-deploy` handoff is merged after terminal-green push and PR pipelines on its exact
+  SHA.
 
-This is the control-plane foundation, not the finished runtime. The next executable product work is
-M1 and M2 in parallel: the installable CLI/doctor and the portable workflow contract/validator.
+The portable runtime now includes validated contracts, a concurrent ready queue, durable fenced
+state, immutable schema-checked artifacts, attempt-specific worktrees, explicit integration nodes,
+provider adapters, tamper-evident receipts, profile/base identity pinning, and a current-protocol MCP
+task surface. Integration checks can now use explicit typed repair routes to invalidate only named
+producers, pass durable failure evidence back as an input, and reconstruct integration under
+round, attempt, no-progress, and total-workflow budgets. Packaging, public tree/history scanning,
+and clean-wheel installation are CI gates.
 
 The repository already has tested implementations for:
 
@@ -126,29 +163,40 @@ The first MCP control-plane decision is evidence-driven:
   compatibility service and then behind our MCP 2.0 adapter;
 - use MCP Tasks for durable long-running handles when the host advertises the extension;
 - serve `graph-engineering` through filesystem skills today and a `skill://` resource index when
-  Skills-over-MCP stabilizes; capability-detect it because SEP-2640 remains experimental;
+  Skills-over-MCP stabilizes; capability-detect it because SEP-2640 and the working-group repository
+  remain experimental and do not establish a portable host discovery guarantee;
 - keep exactly one task-graph owner per project. Multiple graph servers writing independent state
   would create split-brain claims and contradictory readiness.
 
+“MCP 2.0” is not a dependency version or a server label. Support is established per connection by
+protocol-version agreement and capability negotiation. Tasks are an extension: task augmentation
+is permitted only when the client profile and server negotiate the extension for the exact request
+category and the selected tool permits or requires it. Otherwise the portable scheduler uses a
+normal tool call and its own durable run state. A Skills-over-MCP resource can describe how to use
+already-authorized tools, but it cannot grant authority, expand a profile's server visibility, or
+override workflow policy.
+
 Rejected as default dependencies after clean-clone checks: `P0u4a/mcp-workflow` failed its own
-pause/resume test and reported critical dependency vulnerabilities; `TeamSparkAI/mcpGraph` failed
-one of 126 tests and reported eight high-severity dependency vulnerabilities; the audited
-`agent-graph-mcp` revision referenced a missing local path dependency; and
-`agentralabs/agentic-workflow` documents MCP/shell step runners as planned despite its broad tool
-surface. Their useful schema and routing ideas remain design inputs, not installed control planes.
+pause/resume test and its production dependency audit reported two high and three moderate findings;
+`TeamSparkAI/mcpGraph` failed one of 126 tests and its production dependency audit reported seven
+high, two moderate, and one low finding; the audited `agent-graph-mcp` revision referenced missing
+local path dependencies; and `agentralabs/agentic-workflow` returns prepared placeholders for core
+MCP, shell, HTTP, subworkflow, and fan-out execution despite its broad tool surface. Their useful
+schema, test, and routing ideas remain design inputs, not installed control planes.
 
-The portable graph runtime is not yet executable. `produces` and `consumes` are currently trace metadata:
-they do not schedule consumers after producers or transfer artifacts between worktrees. There is
-also no root package, stable CLI, durable run store, mixed-engine run, release process, or
-clean-machine installation path. The repository now has a parallel Woodpecker CI baseline; later
-milestones must extend it with package, conformance, integration, safety, and release gates.
+The portable graph runtime is executable through the deliberately thin `graph-engineer` CLI.
+`produces` and `consumes` drive readiness and schema-checked artifact transfer; durable SQLite
+state, fenced attempts, isolated worktrees, integration gates, receipts, resume, and mixed-engine
+subprocess adapters are covered by package and clean-install tests. The first two measured pilots
+are recorded in [PILOTS.md](PILOTS.md): one successful graph was 13.13% faster and added a missing
+test, while another was 26.3% slower but correctly blocked defects that escaped the nominally green
+single-agent baseline. Those results justify the CLI and routed repair work, not an always-on hook.
 
-The public/private split is incomplete. The public tree still carries organization-specific
-service/unit names, filesystem locations, private-project examples, incident statistics, and
-deployed reconciler assumptions under `ops/` and `traces/`.
-They are not credentials, but they are private operational policy and make the public package
-look environment-specific. M0 must extract them into a private extension or replace them with
-synthetic fixtures before the project is presented as a reusable public product.
+The public/private split is enforced rather than advisory. Public configuration contains only
+routing examples and environment-variable references. User profiles, provider endpoints, secret
+references, and private MCP registrations live in ignored user or local configuration. Literal
+secret rejection, reduced worker environments, restricted worker templates, and complete public
+tree plus reachable-history scans fail closed in CI.
 
 ## External prior art and selective reuse
 
@@ -170,6 +218,25 @@ workflow contract.
 Before copying code, preserve its license notice and record provenance in `NOTICE.md`. Prefer an
 upstream dependency or a focused, attributable port over an untraceable rewrite. Every imported
 behavior needs a local contract test so later upstream changes cannot silently alter our guarantees.
+
+### MCP and task-graph prior art, pinned
+
+These revisions were fetched and inspected from their primary repositories. A revision appearing
+here is provenance for a design input, not a dependency endorsement.
+
+| Source and audited revision | License | Selectively adopt | Reject or constrain |
+|---|---|---|---|
+| `Oortonaut/task-graph-mcp@75f71d6286b10686fd4c88a38cdef7e9ee1ab1d0` | Apache-2.0 | Typed dependency edges, transaction-safe cycle checks, atomic claim/lock tests, fan-in and cascading-unblock conformance cases | Worker-visible force bypass, attachment-presence gates, advisory file marks, and heartbeat-only stale release; add fencing generations and one graph owner |
+| `RecursiveIntell/agent-graph-mcp@aaaa52f09b7aca4b4515af6f3f82712a0145e61e` | MIT | Graph size/iteration budgets, honest resume eligibility, checkpoint/effect rules, intent-result-parent receipts, tamper and crash tests | Not buildable from a clean clone because patched dependencies point outside the repository; signed integrity is not factual correctness |
+| `TeamSparkAI/mcpGraph@2fbdb7d6296bcdc3802dbe89bf27d1fa951eb73c` | MIT | Static graph validation, deterministic routing/transform concepts, node/time ceilings | Sequential and non-durable; unrestricted expressions, arbitrary process/server configuration, failed test, and vulnerable dependency tree make it unsuitable as the control plane |
+| `P0u4a/mcp-workflow@71811e5dbe2519c14b4e457db38a6b0789ccb893` | MIT | Activity lifecycle and pluggable store interface shapes | Linear in-memory default, failing pause/resume test, uncancelled timed-out effects, and retries without idempotency classification |
+| `Graph-tl/graph@9b8d41778cd56ff5c71a4f418afb8589c1c12d73` | MIT | Ready-frontier ranking, inherited decision context, resolved-dependency evidence, atomic planning UX | Non-atomic claim path, TTL duplicate risk, and self-reported/unverified evidence; use as planning UX, not execution truth |
+| `utilitydelta/mcp-graph-engine@84ea6765a95955c283259bd9d4d01d858d0a4f62` | MIT | Transitive reduction, critical path, weak components, deterministic JSON/Mermaid reporting | Knowledge graph rather than task scheduler; unbounded path queries, fuzzy task identity, arbitrary file access, and raw query surface |
+| `agentralabs/agentic-workflow@1472798bb1dea1486b1a3718e163c27d1e97faa6` | MIT | Failure taxonomy, per-class retry budgets, idempotency schema, dead-letter grouping, WaitAll/Any/N/Timeout joins | Execution facade prepares rather than runs core steps; several resilience fields are not enforced and its protocol implementation pins an older revision |
+
+Clean-room ports should name the source revision in an ADR or code comment and reproduce the
+behavior with local conformance tests. Substantial copied MIT code retains copyright and license
+text; Apache-2.0 material additionally retains required notices and records modifications.
 
 ## Naming and discovery
 
@@ -269,6 +336,8 @@ work begins early, but a stable release waits for the complete end-to-end path.
   - `graph-engineer status`
   - `graph-engineer resume`
 - Define config precedence: built-in defaults → user config → project config → environment → CLI.
+- Validate public capability manifests separately from ignored private profile/server registrations;
+  logs and diagnostics expose opaque IDs and hashes, never connection or credential material.
 - Validate configuration with actionable field paths and suggestions.
 - Detect installed engines, versions, authentication readiness, MCP registration, git/worktree
   support, and available test runners.
@@ -278,6 +347,8 @@ work begins early, but a stable release waits for the complete end-to-end path.
 
 - Install with `pipx`, `uv tool install`, and editable source installation in clean environments.
 - `doctor` distinguishes absent, installed, unauthenticated, and unsupported agent CLIs.
+- `doctor` reports profile eligibility and negotiated capability drift without printing private
+  endpoints, credential references, or server inventories.
 - Invalid config fails before any agent or subprocess starts.
 - Config precedence and Unicode paths are covered by tests.
 
@@ -287,7 +358,8 @@ work begins early, but a stable release waits for the complete end-to-end path.
 
 - Define a versioned JSON Schema for workflow files.
 - Model nodes with:
-  - stable ID, task, engine, model, inputs, outputs, and output schema;
+  - stable ID, task, required capabilities, optional profile selector, model class, inputs,
+    outputs, and output schema;
   - `needs`, `foreach`, condition, timeout, retry, and concurrency policy;
   - workspace mode, checks, verifier policy, and approval requirement;
   - required versus optional output and fan-in coverage thresholds.
@@ -295,6 +367,8 @@ work begins early, but a stable release waits for the complete end-to-end path.
 - Reject unknown fields, duplicate node IDs, cycles, ambiguous producers, missing producers,
   incompatible schemas, invalid conditions, and unsafe workspace combinations.
 - Render the validated graph as text, JSON, and Mermaid.
+- Reject a workflow that embeds a private endpoint, credential reference, or undeclared ambient
+  server dependency; resolve authorized profiles only after loading local configuration.
 - Version the workflow format independently from the Python package.
 
 ### Acceptance evidence
@@ -303,6 +377,8 @@ work begins early, but a stable release waits for the complete end-to-end path.
 - Breaking the cycle detector, producer validation, or schema compatibility check makes the
   corresponding sabotage test fail.
 - The validator performs no model calls and has deterministic output.
+- Profile-independent validation and profile-aware preflight produce stable, separately testable
+  diagnostics; no worker starts when the capability intersection is empty.
 
 ## M3 — Scheduler, state machine, artifacts, and resume
 
@@ -312,11 +388,18 @@ work begins early, but a stable release waits for the complete end-to-end path.
 - Support fan-out, true fan-in barriers, and streaming pipelines without global barriers.
 - Store run state in a crash-safe SQLite database with schema migrations.
 - Store immutable, content-addressed artifacts outside agent conversation history.
+- Store immutable capability snapshots and evidence receipts alongside artifacts. A receipt binds
+  node/run IDs, attempt and fencing generation, profile/adapter version, negotiated protocol and
+  capability hashes, workspace/base/result SHAs, check command identity, timing, exit status,
+  output digests, artifact digests, and verifier version.
 - Validate artifacts against their declared JSON schemas before releasing downstream nodes.
 - Implement node states such as pending, ready, running, passed, failed, blocked, skipped,
   awaiting-approval, and cancelled.
 - Add bounded per-node retry with failure classification and no-progress detection.
-- Resume completed nodes from durable artifacts; never trust a partial node after interruption.
+- Classify read-only, idempotent, and non-idempotent effects before retry; a committed
+  non-idempotent effect cannot replay without an explicit idempotency proof.
+- Resume completed nodes from durable artifacts only when their receipt and capability snapshot
+  validate; never trust a partial node after interruption.
 - Add global and per-engine concurrency limits plus cancellation and SIGTERM cleanup.
 
 ### Acceptance evidence
@@ -324,11 +407,14 @@ work begins early, but a stable release waits for the complete end-to-end path.
 - A consumer cannot start before its producer artifact validates.
 - Independent nodes overlap in time; dependent nodes do not.
 - Killing the runner mid-run and resuming does not repeat completed nodes or accept partial output.
+- A stale claimant cannot commit after its lease is renewed under a new fencing generation.
+- Tampering with a capability snapshot, result digest, parent receipt, or integration receipt fails
+  closed, while the diagnostic distinguishes integrity from correctness.
 - One failed optional node does not sink unrelated work, while a failed required node blocks only
   its descendants.
 - File descriptors, worktrees, child processes, and locks return to baseline after soak tests.
 
-## M4 — Claude, Codex, Grok, and Gemini adapters
+## M4 — Agent adapters and profile capabilities
 
 ### Deliverables
 
@@ -338,14 +424,25 @@ work begins early, but a stable release waits for the complete end-to-end path.
 - Codex adapter: `codex exec`, JSONL events, `--output-schema`, sandbox and working-directory policy.
 - Grok adapter: headless execution, JSON schema, worktree/cwd, subagent and permission options.
 - Gemini adapter: headless JSON output, worktree, approval mode, and policy configuration.
+- Keep adapter implementations vendor-specific but profile manifests vendor-neutral. A private
+  profile may bind Claude, Codex, Grok, Kimi K3, GLM 5.2, Gemini, or another compatible runner
+  without changing the workflow graph.
+- Probe each adapter's supported protocol versions, MCP client capabilities/extensions, structured
+  output modes, sandbox controls, and cancellation semantics; hash the result for dispatch.
 - Isolate agent home/config when requested so ambient global instructions cannot corrupt a node.
 - Normalize engine-specific errors into stable categories without discarding original diagnostics.
 - Allow different engines/models per node in the same run.
+- Do not pass ambient global MCP registrations to subagents. Materialize the minimum authorized,
+  workspace-rooted server set for each node from the private registry.
 
 ### Acceptance evidence
 
 - The same synthetic workflow fixture completes on every installed engine.
 - A mixed run can use one engine to implement and a different engine to refute.
+- A workflow requiring a capability routes to every eligible configured profile and to no
+  ineligible profile; deterministic fallback and no-match failure are contract-tested.
+- Changing a profile, server negotiation, or adapter version changes the capability hash and
+  invalidates unsafe cached eligibility without invalidating unrelated pure artifacts.
 - Malformed structured output is rejected or retried; it never reaches a consumer as free text.
 - Missing CLI, authentication failure, rate limit, timeout, refusal, and cancellation each produce
   distinct normalized failures.
@@ -356,10 +453,21 @@ work begins early, but a stable release waits for the complete end-to-end path.
 
 - Package `verify-mcp` with the root distribution.
 - Add idempotent registration and health-check commands for Claude, Codex, Grok, and Gemini.
+- Maintain a private server registry with opaque IDs, project/profile scopes, trust tier, transport
+  policy, and external credential references; public graph files contain none of those values.
+- Negotiate protocol and capabilities for every client/server connection. Gate extension use by
+  profile, server, request category, and tool-level support rather than by SDK version.
 - Generate per-node MCP configuration rooted at the node's isolated workspace.
 - Keep verification tools enumerated and read-only; never accept arbitrary command strings.
 - Add workflow-status and artifact-reading MCP tools where they improve agent context.
 - Keep state transitions owned by the scheduler rather than allowing agents to mark themselves done.
+- Issue atomic scheduler-owned claims with lease generations/fencing tokens; workers cannot bypass
+  dependencies, extend authority, or commit with an expired generation.
+- Validate evidence receipts rather than the existence or label of an attachment. Receipt integrity,
+  source authority, and deterministic correctness are distinct statuses.
+- Continue filesystem skill distribution as the portable baseline. Treat Skills-over-MCP as an
+  experimental, capability-detected resource path whose versioned/digested skills declare required
+  servers, tools, capabilities, provenance, and trust scope.
 - Define unattended, approval-required, and forbidden actions in portable policy.
 - Implement approval nodes for destructive or externally visible actions.
 - Allow project-specific check providers without weakening the fixed-command boundary.
@@ -367,6 +475,10 @@ work begins early, but a stable release waits for the complete end-to-end path.
 ### Acceptance evidence
 
 - Each supported CLI can list and call the same verification tool in a clean test project.
+- A capability matrix fixture proves that unsupported Tasks/Skills extensions degrade to the
+  documented portable path and that supported extensions are used only for authorized requests.
+- A private skill cannot reveal a hidden server to an unauthorized profile or grant a tool/action
+  outside the profile's capability intersection.
 - Path traversal, symlink escape, arbitrary-command injection, and wrong-worktree access fail.
 - An agent exit code cannot override failed evidence.
 - An approval-required node cannot execute from another agent's message or self-approval.
@@ -378,9 +490,14 @@ work begins early, but a stable release waits for the complete end-to-end path.
 - Create nested worktrees safely and serialize git worktree metadata mutation.
 - Deduplicate live jobs by workflow run, node, and target resource.
 - Track base SHA, branch, diff, commits, checks, and worktree ownership for every writing node.
+- Validate the claim fencing generation and capability hash again before accepting or integrating
+  a writing node's result.
 - Define explicit integration nodes that compare, merge, or cherry-pick passing results.
 - Detect conflicting diffs before attempting integration.
 - Re-run integration-level evidence after combining independently green nodes.
+- Route a failed combined check only through declared typed repair edges. Preserve unrelated
+  producer artifacts, pass durable check evidence to named producers, and stop on round,
+  no-progress, per-node attempt, or total-attempt limits.
 - Preserve passing work for review; clean failed or cancelled scratch only under explicit policy.
 - Never push, merge, deploy, or write externally without the configured authority.
 
@@ -389,6 +506,8 @@ work begins early, but a stable release waits for the complete end-to-end path.
 - Parallel writers never share a working tree.
 - Two independently green but conflicting changes fail at integration with a useful report.
 - A combined result cannot pass solely because each lane passed separately.
+- A routed combined failure reruns only its named producer and integration; an unmapped or
+  repeatedly identical failure stops without guessing or replaying unrelated work.
 - Interrupted cleanup never deletes a worktree containing uncommitted or unpushed work.
 
 ## M7 — Workflow library and native integrations
@@ -423,7 +542,8 @@ work begins early, but a stable release waits for the complete end-to-end path.
 - Record wall time, queue time, model, tokens, estimated cost, retries, and artifact lineage.
 - Redact secrets and configurable sensitive patterns before persistence.
 - Extend analysis with workflow keep rate, critical path, idle barrier time, failed-edge coverage,
-  verifier overturn rate, collision rate, and cost per accepted result.
+  verifier overturn rate, collision rate, capability-negotiation/preflight failures, stale-claim
+  rejections, receipt-integrity failures, and cost per accepted result.
 - Add an evaluation corpus of representative small, independent, diamond, routed, and cyclic jobs.
 - Compare linear, swarm, portable graph, and Claude-native workflow executions.
 - Establish performance budgets and run scale tests at 1, 10, 50, and 100 nodes.
@@ -431,6 +551,8 @@ work begins early, but a stable release waits for the complete end-to-end path.
 ### Acceptance evidence
 
 - A trace alone explains why every node ran, skipped, blocked, retried, or failed.
+- A trace identifies the immutable capability/skill/receipt hashes used for each node without
+  exposing private registry contents.
 - Redaction tests prove secrets never land in traces or artifacts.
 - Benchmarks demonstrate that pipelines do not wait behind unrelated slow items.
 - Adoption decisions use measured quality, cost, and latency rather than invocation counts alone.
@@ -507,8 +629,20 @@ Adoption is a measured rollout, not a global hook installed everywhere at once.
 ### Adoption success criteria
 
 - At least 80% of pilot runs produce a kept result.
+- On tasks with at least three real independent lanes, median time to a gate-passing integrated
+  change improves by at least 25% versus the recorded linear baseline, with final deterministic
+  pass rate no lower and escaped deterministic defects no higher.
+- At least 60% of theoretically parallel worker time overlaps during eligible pilot runs; report
+  critical-path time and idle barrier time so apparent speedups cannot come from skipped evidence.
+- A failed lane reruns only itself and invalidated descendants in at least 90% of retrying runs;
+  whole-workflow retry rate remains below 10%.
+- Capability negotiation and profile preflight complete before worker launch in 100% of runs, and
+  every dispatched node records matching immutable capability and skill hashes.
+- Evidence-receipt integrity, stale-claim fencing, and duplicate-target conformance fixtures have a
+  100% rejection rate; pilot runs have zero accepted stale or duplicate writer commits.
 - Graph workflows beat the relevant linear baseline on quality or wall time without unacceptable
-  cost growth.
+  cost growth; report median/p95 wall time, token/cost per accepted result, verifier overturn rate,
+  integration-conflict rate, and human intervention time by workflow shape and profile.
 - No duplicate writer targets or shared-worktree collisions occur.
 - Every accepted result has deterministic evidence and artifact lineage.
 - A verifier overturn is visible and prevents integration.
@@ -563,5 +697,7 @@ acceptance evidence exists on the exact released tree.
 8. Representative project pilots show measurable value over the prior development process.
 9. The reachable public history contains no private configuration, identifiers, or credentials.
 10. The project can be adopted or removed without hidden global state or irreversible changes.
+11. Arbitrary configured profiles are selected by a validated capability intersection, and every
+    accepted node result is bound to immutable negotiation, claim, artifact, and evidence receipts.
 
 That is the finish line. A working graph demo is M4, not completion.

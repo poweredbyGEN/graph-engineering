@@ -1,0 +1,109 @@
+{
+  "version": "graph-engineering/v1alpha1",
+  "id": "bounded_repair",
+  "goal": "Integrate a checked change and route combined failures to its named producer",
+  "budgets": {
+    "max_nodes": 2,
+    "max_concurrency": 1,
+    "max_attempts_per_node": 2,
+    "max_total_attempts": 4,
+    "timeout_seconds": 600
+  },
+  "nodes": [
+    {
+      "id": "implementation",
+      "kind": "agent",
+      "task": "Write the exact text expected by the project check to src/config.txt.",
+      "needs": [],
+      "inputs": {},
+      "outputs": {
+        "result": {
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["summary"],
+            "properties": {"summary": {"type": "string"}}
+          }
+        },
+        "changeset": {
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["base_sha", "patch_b64", "untracked_b64", "changed_paths", "digest"],
+            "properties": {
+              "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+              "patch_b64": {"type": "string"},
+              "untracked_b64": {"type": "object", "additionalProperties": {"type": "string"}},
+              "changed_paths": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {"type": "string", "minLength": 1}
+              },
+              "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            }
+          }
+        }
+      },
+      "profile": "implementation",
+      "workspace": "worktree",
+      "write_scope": ["src/config.txt"],
+      "permission": "write",
+      "effect": "none",
+      "checks": [
+        {
+          "id": "unit",
+          "argv": ["python3", "-c", "from pathlib import Path; assert Path('src/config.txt').is_file()"]
+        }
+      ],
+      "retry": {"max_attempts": 2, "no_progress_limit": 1},
+      "required": true
+    },
+    {
+      "id": "integrate",
+      "kind": "integration",
+      "task": "Apply the accepted implementation changeset and run the combined gate.",
+      "needs": ["implementation"],
+      "inputs": {"implementation": "implementation.changeset"},
+      "outputs": {
+        "result": {
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["base_sha", "changed_paths", "change_digests", "integration_digest"],
+            "properties": {
+              "base_sha": {"type": "string"},
+              "changed_paths": {"type": "array", "items": {"type": "string"}},
+              "change_digests": {"type": "array", "items": {"type": "string"}},
+              "integration_digest": {"type": "string"}
+            }
+          }
+        }
+      },
+      "workspace": "worktree",
+      "write_scope": ["src/config.txt"],
+      "permission": "write",
+      "checks": [
+        {
+          "id": "combined",
+          "argv": ["python3", "-c", "from pathlib import Path; assert Path('src/config.txt').read_text() == 'expected\\n'"]
+        }
+      ],
+      "retry": {"max_attempts": 2, "no_progress_limit": 1},
+      "repair": {
+        "routes": [
+          {
+            "id": "combined_to_implementation",
+            "check_ids": ["combined"],
+            "targets": [
+              {"node": "implementation", "input": "integration_failure"}
+            ],
+            "max_rounds": 1,
+            "no_progress_limit": 1
+          }
+        ]
+      },
+      "required": true
+    }
+  ],
+  "outputs": {"result": "integrate.result"}
+}

@@ -128,9 +128,21 @@ Detail: [`swarm/README.md`](../swarm/README.md).
 
 ## Step 5 — Graph: use it when the dependencies are real
 
-The executable portable graph runner is still being built. The `graph-engineering` skill can
-already plan and execute through native host subagents, while making clear which scheduling and
-recovery guarantees are not yet enforced by code.
+Install the alpha portable package in its own environment:
+
+```bash
+cd graph-engineering
+uv venv && uv pip install -e ".[dev]"
+uv run graph-engineer --help
+uv run graph-engineering-mcp --help
+```
+
+The package contains validated contracts, ready-queue scheduling, durable state, artifacts,
+worktree transfer, subprocess worker adapters, and the MCP task server. The deliberately thin
+`graph-engineer` CLI validates and plans workflows, runs or resumes them, and inspects durable
+status. Use the `graph-engineering` skill for host-native topology decisions and the packaged MCP
+server for durable cross-client task claiming. See [`CLI.md`](CLI.md) for the JSON contract and
+[`PILOTS.md`](PILOTS.md) for the measured boundary between useful graphs and needless overhead.
 
 Promote work to an explicit graph only when traces show real branching, joins that must
 synchronize, or human approval gates — and only after you have those traces. A graph drawn
@@ -138,6 +150,11 @@ before the evidence exists just adds rigidity to a system that hasn't earned it.
 
 Collect the traces first (`--trace` on both the loop and the swarm), read them, and see whether
 the branching is real.
+
+For Claude, Codex, Grok, Kimi K3, GLM 5.2, and other workers, copy the private profile template in
+[`subagents.example.toml`](../subagents.example.toml). Kimi/GLM examples use a restricted OpenCode
+subprocess route that the runtime implements; direct OpenAI-compatible execution is not yet
+implemented. See [`SUBAGENTS.md`](SUBAGENTS.md).
 
 ---
 

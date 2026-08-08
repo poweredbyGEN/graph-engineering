@@ -12,10 +12,8 @@ fi
 state_home=${GRAPH_ENGINEERING_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/graph-engineering}
 graph_state="$state_home/task-graphs/$project_key"
 
-mkdir -p "$graph_state/media" "$graph_state/logs"
+mkdir -p "$graph_state"
 
-exec task-graph-mcp \
+exec graph-engineering-mcp \
   --database "$graph_state/tasks.db" \
-  --media-dir "$graph_state/media" \
-  --log-dir "$graph_state/logs" \
   --stdio

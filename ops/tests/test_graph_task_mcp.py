@@ -17,7 +17,7 @@ def test_wrapper_keeps_state_outside_project(tmp_path: Path):
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
-    fake_server = fake_bin / "task-graph-mcp"
+    fake_server = fake_bin / "graph-engineering-mcp"
     fake_server.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
     fake_server.chmod(0o755)
 
@@ -43,7 +43,7 @@ def test_wrapper_separates_projects(tmp_path: Path):
     # because the same user-level MCP registration launched both servers.
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
-    fake_server = fake_bin / "task-graph-mcp"
+    fake_server = fake_bin / "graph-engineering-mcp"
     fake_server.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
     fake_server.chmod(0o755)
     state = tmp_path / "state"

@@ -1,0 +1,104 @@
+# Copy this template to ~/.config/graph-engineering/config.toml (private, mode 0600).
+# It intentionally contains no endpoint, host, credential, or secret value. API adapters
+# reference environment variable NAMES; inject their values with your own secret manager.
+version = 1
+
+[profiles.claude]
+adapter = "subprocess"
+model = "your-claude-model"
+[profiles.claude.capabilities]
+read = true
+write = true
+structured_output = true
+worktree = true
+resume = false
+mcp = false
+[profiles.claude.subprocess]
+argv = ["claude", "--print", "--model", "{model}", "--output-format", "json", "--strict-mcp-config", "--mcp-config", "{{\"mcpServers\":{{}}}}", "--tools", "Read,Edit,Write,Glob,Grep"]
+prompt_transport = "stdin"
+output_format = "json"
+env_allowlist = []
+
+[profiles.codex]
+adapter = "subprocess"
+model = "your-codex-model"
+[profiles.codex.capabilities]
+read = true
+write = true
+structured_output = true
+worktree = true
+resume = false
+mcp = false
+[profiles.codex.subprocess]
+argv = ["codex", "exec", "-", "--model", "{model}", "--json", "--sandbox", "workspace-write", "--ephemeral", "--ignore-user-config", "-C", "{cwd}"]
+prompt_transport = "stdin"
+output_format = "jsonl"
+env_allowlist = []
+
+[profiles.grok]
+adapter = "subprocess"
+model = "your-grok-model"
+[profiles.grok.capabilities]
+read = true
+write = true
+structured_output = true
+worktree = true
+resume = false
+mcp = false
+[profiles.grok.subprocess]
+argv = ["grok", "--prompt-file", "{prompt_file}", "--model", "{model}", "--output-format", "streaming-json", "--cwd", "{cwd}", "--tools", "read_file,grep,list_dir,search_replace", "--deny", "MCPTool(*)", "--disable-web-search", "--no-memory", "--no-subagents", "--sandbox", "strict", "--max-turns", "24"]
+prompt_transport = "file"
+output_format = "jsonl"
+env_allowlist = []
+
+# Kimi and GLM use the same implemented subprocess boundary through OpenCode. Install the
+# restricted graph-worker agent from examples/opencode-agents/graph-worker.md first. Replace
+# model aliases with provider/model identifiers configured in your own OpenCode installation.
+[profiles.kimi-k3]
+adapter = "subprocess"
+model = "your-provider/your-kimi-model"
+[profiles.kimi-k3.capabilities]
+read = true
+write = true
+structured_output = true
+worktree = true
+resume = false
+mcp = false
+[profiles.kimi-k3.subprocess]
+argv = ["opencode", "run", "--pure", "--agent", "graph-worker", "--model", "{model}", "--format", "json", "--dir", "{cwd}"]
+prompt_transport = "stdin"
+output_format = "jsonl"
+env_allowlist = []
+
+[profiles."glm-5.2"]
+adapter = "subprocess"
+model = "your-provider/your-glm-model"
+[profiles."glm-5.2".capabilities]
+read = true
+write = true
+structured_output = true
+worktree = true
+resume = false
+mcp = false
+[profiles."glm-5.2".subprocess]
+argv = ["opencode", "run", "--pure", "--agent", "graph-worker", "--model", "{model}", "--format", "json", "--dir", "{cwd}"]
+prompt_transport = "stdin"
+output_format = "jsonl"
+env_allowlist = []
+
+[pools.coding]
+profiles = ["claude", "codex", "grok", "kimi-k3", "glm-5.2"]
+strategy = "stable-hash"
+
+[pools.verification]
+profiles = ["claude", "kimi-k3", "glm-5.2"]
+strategy = "stable-hash"
+
+[tiers.mechanical]
+pool = "coding"
+
+[tiers.judgment]
+pool = "verification"
+
+[routing]
+default_tier = "mechanical"

@@ -1,0 +1,11 @@
+when:
+  - event: [push, pull_request]
+
+steps:
+  runtime:
+    image: ghcr.io/astral-sh/uv:python3.13-bookworm
+    commands:
+      - uv run --frozen --extra dev pytest -q tests
+      - uv build
+
+concurrency: 1

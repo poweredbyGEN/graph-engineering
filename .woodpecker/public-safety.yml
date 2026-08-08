@@ -1,0 +1,20 @@
+when:
+  - event: [push, pull_request]
+
+steps:
+  public-safety:
+    image: ghcr.io/astral-sh/uv:python3.13-bookworm
+    commands:
+      - apt-get update && apt-get install -y --no-install-recommends git
+      - uv sync --frozen --extra dev
+      - uv run pytest -q tests/test_public_safety.py
+      - uv run python -m graph_engineering.public_safety --repo . --mode tree
+      - >-
+        if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+          git fetch --unshallow --tags origin '+refs/heads/*:refs/remotes/origin/*';
+        else
+          git fetch --force --tags origin '+refs/heads/*:refs/remotes/origin/*';
+        fi
+      - uv run python -m graph_engineering.public_safety --repo . --mode history
+
+concurrency: 1

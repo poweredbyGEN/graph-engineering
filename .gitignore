@@ -12,3 +12,6 @@ task-graph/
 
 # Site config — machine-specific paths and repo lists. Never committed.
 config.toml
+
+# Private graph worker definitions. Checked-in .graph-engineering.toml is routing-only.
+.graph-engineering.local.toml

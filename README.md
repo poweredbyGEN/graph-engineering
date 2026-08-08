@@ -73,11 +73,13 @@ own traces and see how many of your checks have never caught anything.
 
 ### Graph
 
-**[`graph/`](graph)** does not yet contain the executable scheduler. The first portable graph
-contract, runtime, and MCP control-plane work is tracked in the [build roadmap](docs/ROADMAP.md).
-Until that runtime lands, the `graph-engineering` skill applies the same dependency audit and
-evidence gates through each host's native subagent primitives, and reports which guarantees are
-procedural rather than mechanically enforced.
+The alpha Python package contains validated workflow contracts, a ready-queue scheduler, durable
+SQLite run state, immutable artifact receipts, fenced worktree change transfer, worker profile
+selection, subprocess adapters, and an MCP task coordination server. The deliberately thin
+[`graph-engineer` CLI](docs/CLI.md) exposes only the deterministic operations justified by project
+pilots: validate, doctor, plan, run/resume, and status. It is not a graph editor or a second
+orchestration framework. The `graph-engineering` skill remains the portable playbook for drawing
+and executing graphs through host-native orchestration.
 
 Lanes declare `produces`/`consumes`, so the **fake edge test** — *does A's output actually
 flow into B?* — is computed rather than argued. Correlated outcomes are only a hint; two
@@ -104,8 +106,9 @@ It can also be invoked explicitly as `$graph-engineering` where the host support
 ### This repo gates itself
 
 [`.evidence.toml`](.evidence.toml) runs all four component suites plus the docs check.
-[`.woodpecker/ci.yml`](.woodpecker/ci.yml) runs the skill contract, documentation accuracy,
-component suites, and MCP server tests on every push and pull request.
+The [Woodpecker pipelines](.woodpecker/) run the skill contract, documentation accuracy,
+component suites, MCP server tests, runtime tests, public tree/history scans, and clean-package
+installation on every push and pull request.
 
 ```bash
 cd loops && python3 -m evidence_loop.loop --config ../.evidence.toml --cwd .. --check-only
@@ -138,15 +141,26 @@ prompt) and cross-model adversarial verification.
 
 ```bash
 git clone https://github.com/poweredbyGEN/graph-engineering.git
-cd graph-engineering/harness/servers/verify-mcp
+cd graph-engineering
 uv venv && uv pip install -e ".[dev]"
-uv run pytest -q
+uv run graph-engineer --help
+uv run graph-engineering-mcp --help
 
-claude mcp add verify -- "$PWD/.venv/bin/verify-mcp"
+uv run graph-engineer doctor --repo "$PWD"
+uv run graph-engineer validate workflow.json
+uv run graph-engineer plan workflow.json
+uv run graph-engineer run workflow.json --repo "$PWD" --run-id first-run
+uv run graph-engineering-mcp --database "$HOME/.local/state/graph-engineering/tasks.db"
 ```
 
-Then have your agent call `list_checks` — it reports the configured root and which runners are
-installed, so the agent discovers your stack instead of guessing it.
+The final command starts the portable MCP task server over stdio. See [CLI.md](docs/CLI.md) for the
+JSON workflow and durable-run contract, [MCP.md](docs/MCP.md) for client integration,
+[SUBAGENTS.md](docs/SUBAGENTS.md) for portable worker profiles, and [SETUP.md](docs/SETUP.md) for
+the deterministic verification harness. [PILOTS.md](docs/PILOTS.md) reports both the successful
+speedup and the slower graph that blocked a defect, including cold-adoption failures.
+
+Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) describes the deterministic local
+gate and public/private boundary; [CHANGELOG.md](CHANGELOG.md) records user-visible releases.
 
 ## Conventions
 
@@ -163,4 +177,4 @@ Three rules everything here follows:
 
 ## License
 
-MIT
+[MIT](LICENSE). Third-party provenance and retained notices are recorded in [NOTICE.md](NOTICE.md).
