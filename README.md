@@ -139,6 +139,15 @@ prompt) and cross-model adversarial verification.
 
 ## Quickstart
 
+Install the reviewed alpha artifact from the public release, or clone the repository for
+development:
+
+```bash
+uv tool install \
+  https://github.com/poweredbyGEN/graph-engineering/releases/download/v0.1.0a1/graph_engineering-0.1.0a1-py3-none-any.whl
+graph-engineer --version
+```
+
 ```bash
 git clone https://github.com/poweredbyGEN/graph-engineering.git
 cd graph-engineering

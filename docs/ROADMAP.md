@@ -144,6 +144,9 @@ task surface. Integration checks can now use explicit typed repair routes to inv
 producers, pass durable failure evidence back as an input, and reconstruct integration under
 round, attempt, no-progress, and total-workflow budgets. Packaging, public tree/history scanning,
 and clean-wheel installation are CI gates.
+The first public alpha, `v0.1.0a1`, is released from exact merged SHA `01611b7` with wheel, source
+distribution, and checksums. Its tagged publish dry run and clean release-URL installation passed;
+PyPI remains intentionally unavailable until a trusted-publishing identity is configured.
 
 The repository already has tested implementations for:
 
