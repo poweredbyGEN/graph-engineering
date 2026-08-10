@@ -40,6 +40,14 @@ from .contracts import (
     WorkflowValidationError,
     validate_workflow,
 )
+from .learning import (
+    LearningError,
+    benchmark_run,
+    compare_benchmark,
+    compile_feedback,
+    load_baseline,
+)
+from .forking import FORK_VERSION, ForkError, create_fork
 from .lifecycle import LifecycleError, LifecycleStore
 from .orchestrator import (
     CheckCommandReceipt,
@@ -962,6 +970,78 @@ def _trace(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _benchmark(args: argparse.Namespace) -> dict[str, Any]:
+    if not _RUN_ID.fullmatch(args.run_id):
+        raise CliError("INVALID_RUN_ID", "run id is not portable")
+    state_path = Path(args.state).expanduser().resolve(strict=True)
+    report = benchmark_run(state_path, args.run_id)
+    comparison = (
+        compare_benchmark(report, load_baseline(Path(args.baseline).expanduser()))
+        if args.baseline
+        else None
+    )
+    document = {"report": report, "comparison": comparison}
+    output = str(_write_document(args.output, document)) if args.output else None
+    return {
+        "ok": True,
+        "command": "benchmark",
+        "run_id": args.run_id,
+        "state": str(state_path),
+        "output": output,
+        **document,
+    }
+
+
+def _feedback(args: argparse.Namespace) -> dict[str, Any]:
+    proposal = compile_feedback(Path(args.input).expanduser())
+    output = str(_write_document(args.output, proposal)) if args.output else None
+    return {
+        "ok": True,
+        "command": "feedback",
+        "output": output,
+        "proposal": proposal,
+    }
+
+
+def _events(args: argparse.Namespace) -> dict[str, Any]:
+    if not _RUN_ID.fullmatch(args.run_id):
+        raise CliError("INVALID_RUN_ID", "run id is not portable")
+    state_path = Path(args.state).expanduser().resolve(strict=True)
+    batch = LifecycleStore(state_path).stream(
+        args.run_id,
+        cursor=args.cursor,
+        limit=args.limit,
+        wait_seconds=args.wait,
+    )
+    return {
+        "ok": True,
+        "command": "events",
+        "state": str(state_path),
+        **batch,
+    }
+
+
+def _fork(args: argparse.Namespace) -> dict[str, Any]:
+    if not _RUN_ID.fullmatch(args.run_id) or not _RUN_ID.fullmatch(args.new_run_id):
+        raise CliError("INVALID_RUN_ID", "run id is not portable")
+    state_path = Path(args.state).expanduser().resolve(strict=True)
+    lineage = create_fork(
+        state_path,
+        args.run_id,
+        args.at_sequence,
+        args.new_run_id,
+    )
+    return {
+        "ok": True,
+        "command": "fork",
+        "version": FORK_VERSION,
+        "state": str(state_path),
+        "run_id": args.new_run_id,
+        "status": "pending",
+        "lineage": lineage,
+    }
+
+
 def _error_payload(command: str | None, exc: BaseException) -> dict[str, Any]:
     if command == "doctor":
         code = getattr(exc, "code", "DOCTOR_FAILED")
@@ -1005,6 +1085,18 @@ def _error_payload(command: str | None, exc: BaseException) -> dict[str, Any]:
             error["path"] = exc.path
         return {"ok": False, "command": command, "error": error}
     if isinstance(exc, LifecycleError):
+        return {
+            "ok": False,
+            "command": command,
+            "error": {"code": exc.code, "message": exc.message},
+        }
+    if isinstance(exc, LearningError):
+        return {
+            "ok": False,
+            "command": command,
+            "error": {"code": exc.code, "message": exc.message},
+        }
+    if isinstance(exc, ForkError):
         return {
             "ok": False,
             "command": command,
@@ -1120,6 +1212,26 @@ def _print_human(payload: Mapping[str, Any]) -> None:
             subject = f" {event['node_id']}" if event["node_id"] else ""
             attempt = f"#{event['attempt']}" if event["attempt"] is not None else ""
             print(f"  {event['sequence']:04d} {event['event_type']}{subject}{attempt}")
+    elif command == "benchmark":
+        print(f"benchmark {payload['run_id']}: {payload['report']['digest']}")
+        for key, value in sorted(payload["report"]["metrics"].items()):
+            print(f"  {key}: {'unavailable' if value is None else value}")
+    elif command == "feedback":
+        proposal = payload["proposal"]
+        print(f"learning proposal {proposal['source_id']}: {proposal['digest']}")
+        for action in proposal["actions"]:
+            print(f"  {action['id']}: {action['target']} (review required)")
+    elif command == "events":
+        for event in payload["events"]:
+            print(json.dumps(event, sort_keys=True, separators=(",", ":")))
+        if payload["terminal"]:
+            print("stream terminal")
+        print(f"cursor: {payload['next_cursor']}")
+    elif command == "fork":
+        parent = payload["lineage"]["parent_run_id"]
+        sequence = payload["lineage"]["parent_event"]["sequence"]
+        print(f"fork {payload['run_id']}: {parent}@{sequence}")
+        print(f"state: {payload['state']}")
 
 
 def _profile_name(value: str) -> str:
@@ -1209,6 +1321,25 @@ def _parser() -> argparse.ArgumentParser:
     trace.add_argument("--limit", type=int, default=500)
     trace.add_argument("--json", action="store_true", dest="json_output")
 
+    events = subparsers.add_parser(
+        "events", help="read a bounded reconnectable lifecycle event batch"
+    )
+    events.add_argument("--state", required=True)
+    events.add_argument("--run-id", required=True)
+    events.add_argument("--cursor")
+    events.add_argument("--limit", type=int, default=100)
+    events.add_argument("--wait", type=float, default=0)
+    events.add_argument("--json", action="store_true", dest="json_output")
+
+    fork = subparsers.add_parser(
+        "fork", help="create an immutable fresh run from a verified checkpoint"
+    )
+    fork.add_argument("--state", required=True)
+    fork.add_argument("--run-id", required=True, help="parent run id")
+    fork.add_argument("--at-sequence", required=True, type=int)
+    fork.add_argument("--new-run-id", required=True)
+    fork.add_argument("--json", action="store_true", dest="json_output")
+
     handoff = subparsers.add_parser(
         "handoff", help="export a bound cross-engine handoff"
     )
@@ -1244,6 +1375,21 @@ def _parser() -> argparse.ArgumentParser:
     accept.add_argument("--workflow-output", required=True)
     accept.add_argument("--acceptance-output", required=True)
     accept.add_argument("--json", action="store_true", dest="json_output")
+    benchmark = subparsers.add_parser(
+        "benchmark", help="derive evidence-bound outcome metrics for one run"
+    )
+    benchmark.add_argument("--state", required=True)
+    benchmark.add_argument("--run-id", required=True)
+    benchmark.add_argument("--baseline")
+    benchmark.add_argument("--output")
+    benchmark.add_argument("--json", action="store_true", dest="json_output")
+
+    feedback = subparsers.add_parser(
+        "feedback", help="compile human/test feedback into reviewed learning proposals"
+    )
+    feedback.add_argument("--input", required=True)
+    feedback.add_argument("--output")
+    feedback.add_argument("--json", action="store_true", dest="json_output")
     return parser
 
 
@@ -1291,6 +1437,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "trace":
             payload = _trace(args)
             exit_code = 0
+        elif args.command == "events":
+            payload = _events(args)
+            exit_code = 0
+        elif args.command == "fork":
+            payload = _fork(args)
+            exit_code = 0
         elif args.command == "handoff":
             payload = _handoff(args)
             exit_code = 0
@@ -1302,6 +1454,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             exit_code = 0
         elif args.command == "accept":
             payload = _accept(args)
+        elif args.command == "benchmark":
+            payload = _benchmark(args)
+            exit_code = 0
+        elif args.command == "feedback":
+            payload = _feedback(args)
             exit_code = 0
         else:
             payload = _status(args)
@@ -1312,6 +1469,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         OrchestrationError,
         ProjectPolicyError,
         LifecycleError,
+        LearningError,
+        ForkError,
         SessionUxError,
         CompilationError,
         CliError,

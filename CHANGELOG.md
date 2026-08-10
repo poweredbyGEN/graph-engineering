@@ -30,6 +30,12 @@ All notable changes to this project are recorded here. The format follows
   repository/base/contract/workflow run-scope claims with exact-resume identity.
 - Portable credential-free repository identity shared by assessment, run-scope claims, runtime
   receipts, and handoffs, with an execution-blocking origin-less fallback.
+- Evidence-bound run benchmarking plus non-applying human/test/verifier feedback compilation into
+  reviewed regression-test, project-decision, workflow, or local-skill proposals.
+- Immutable fresh-run forks bound to verified quiescent lifecycle checkpoints, including parent
+  context, execution identity, artifact, and receipt snapshot digests.
+- A bounded redacted lifecycle event stream with stable reconnect cursors, long-poll limits,
+  backpressure, and explicit terminal batches for neutral Prime/Herdr/CI consumers.
 
 ## [0.1.0a1] - 2026-08-08
 

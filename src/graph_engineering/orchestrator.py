@@ -42,6 +42,7 @@ from .config import (
     get_profile,
 )
 from .contracts import validate_workflow
+from .forking import ForkError, verify_lineage
 from .lifecycle import (
     LifecycleEvent,
     LifecycleStore,
@@ -1258,11 +1259,22 @@ class PortableRuntime:
                 self.workflow, run_id or uuid.uuid4().hex, lifecycle=True
             )
             self._bind_execution_identity(actual_run_id)
+        context_provider = self.context_provider
+        try:
+            lineage = verify_lineage(self.state_path, actual_run_id)
+        except ForkError as exc:
+            raise OrchestrationError(exc.code, exc.message) from exc
+        if lineage is not None:
+            context_provider = StaticRunContextProvider(
+                {**self.context_provider.provide(), "fork_lineage": lineage}
+            )
         run_context = lifecycle.initialize_context(
             actual_run_id,
-            self.context_provider,
+            context_provider,
             allow_legacy_bootstrap=resume and self.bootstrap_legacy_lifecycle,
         )
+        if lineage is not None:
+            scheduler.state.activate_fork(actual_run_id)
         # The portable layer creates and binds a run before any executor can spawn;
         # Scheduler then enters through its verified resume path in both cases.
         result = scheduler.run(actual_run_id, resume=True, lifecycle_resume=resume)

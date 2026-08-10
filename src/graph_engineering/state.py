@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import threading
@@ -13,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .artifacts import canonical_json
 from .lifecycle import append_event_connection
 from .supervision import (
     artifact_set_digest,
@@ -105,6 +107,17 @@ MIGRATIONS = (
       elapsed_seconds REAL NOT NULL DEFAULT 0,
       decision TEXT NOT NULL DEFAULT 'continue', reason TEXT NOT NULL DEFAULT 'not started',
       PRIMARY KEY (run_id, node_id)
+    );
+    """,
+    """
+    CREATE TABLE run_forks (
+      run_id TEXT PRIMARY KEY REFERENCES runs(id),
+      parent_run_id TEXT NOT NULL REFERENCES runs(id),
+      parent_event_sequence INTEGER NOT NULL,
+      parent_event_digest TEXT NOT NULL,
+      lineage_json TEXT NOT NULL,
+      lineage_digest TEXT NOT NULL,
+      created_at REAL NOT NULL
     );
     """,
 )
@@ -225,6 +238,169 @@ class StateStore:
             )
             connection.commit()
         return run_id
+
+    def create_fork_run(
+        self,
+        parent_run_id: str,
+        run_id: str,
+        lineage: Mapping[str, Any],
+    ) -> str:
+        """Atomically create a fresh pending run bound to immutable parent evidence."""
+
+        if parent_run_id == run_id:
+            raise ValueError("a fork must use a distinct run id")
+        encoded_bytes = canonical_json(lineage)
+        encoded = encoded_bytes.decode("utf-8")
+        lineage_digest = hashlib.sha256(encoded_bytes).hexdigest()
+        event = lineage.get("parent_event")
+        if not isinstance(event, Mapping):
+            raise TypeError("fork lineage requires a parent event")
+        try:
+            sequence = int(event["sequence"])
+            event_digest = str(event["digest"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("fork lineage parent event is invalid") from exc
+        now = time.time()
+        with self._write_lock, self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            parent = connection.execute(
+                "SELECT workflow_id,workflow_json FROM runs WHERE id=?",
+                (parent_run_id,),
+            ).fetchone()
+            if parent is None:
+                connection.rollback()
+                raise KeyError(f"unknown run {parent_run_id}")
+            try:
+                workflow = json.loads(parent["workflow_json"])
+            except json.JSONDecodeError as exc:
+                connection.rollback()
+                raise ValueError("parent workflow is corrupt") from exc
+            manifest = connection.execute(
+                "SELECT * FROM runtime_manifests WHERE run_id=?", (parent_run_id,)
+            ).fetchone()
+            if manifest is None:
+                connection.rollback()
+                raise ValueError("parent runtime manifest is missing")
+            parent_event = connection.execute(
+                "SELECT digest FROM lifecycle_events WHERE run_id=? AND sequence=?",
+                (parent_run_id, sequence),
+            ).fetchone()
+            parent_context = connection.execute(
+                "SELECT digest FROM lifecycle_contexts WHERE run_id=?",
+                (parent_run_id,),
+            ).fetchone()
+            if (
+                parent_event is None
+                or parent_event["digest"] != event_digest
+                or parent_context is None
+                or parent_context["digest"] != lineage.get("parent_context_digest")
+                or hashlib.sha256(canonical_json(workflow)).hexdigest()
+                != lineage.get("workflow_digest")
+                or manifest["base_sha"] != lineage.get("base_sha")
+                or manifest["profile_manifest_sha256"]
+                != lineage.get("profile_manifest_digest")
+                or manifest["workflow_sha256"]
+                not in (None, lineage.get("workflow_digest"))
+            ):
+                connection.rollback()
+                raise ValueError("parent fork evidence drifted before child creation")
+            connection.execute(
+                "INSERT INTO runs(id,workflow_id,workflow_json,status,created_at,updated_at,lifecycle_state) "
+                "VALUES (?,?,?,'pending',?,?,'pending')",
+                (run_id, parent["workflow_id"], parent["workflow_json"], now, now),
+            )
+            connection.executemany(
+                "INSERT INTO nodes(run_id,node_id,status,required) VALUES (?,?,'pending',?)",
+                [
+                    (run_id, node["id"], int(node["required"]))
+                    for node in workflow["nodes"]
+                ],
+            )
+            connection.executemany(
+                "INSERT INTO node_progress(run_id,node_id,max_elapsed_seconds,max_commands,"
+                "no_progress_limit) VALUES (?,?,?,?,?)",
+                [
+                    (
+                        run_id,
+                        node["id"],
+                        budget["max_elapsed_seconds"],
+                        budget["max_commands"],
+                        budget["no_progress_limit"],
+                    )
+                    for node in workflow["nodes"]
+                    for budget in (progress_budget(workflow, node),)
+                ],
+            )
+            manifest_columns = [
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(runtime_manifests)")
+                if str(row[1]) != "run_id"
+            ]
+            quoted = ",".join(manifest_columns)
+            connection.execute(
+                f"INSERT INTO runtime_manifests(run_id,{quoted}) "
+                f"SELECT ?,{quoted} FROM runtime_manifests WHERE run_id=?",
+                (run_id, parent_run_id),
+            )
+            connection.execute(
+                "INSERT INTO run_forks VALUES(?,?,?,?,?,?,?)",
+                (
+                    run_id,
+                    parent_run_id,
+                    sequence,
+                    event_digest,
+                    encoded,
+                    lineage_digest,
+                    now,
+                ),
+            )
+            connection.commit()
+        return run_id
+
+    def activate_fork(self, run_id: str) -> None:
+        """Idempotently mark a verified pending fork executable before scheduling."""
+
+        with self._write_lock, self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT runs.status FROM runs JOIN run_forks ON run_forks.run_id=runs.id "
+                "WHERE runs.id=?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                connection.rollback()
+                raise ValueError("run is not a fork")
+            if row["status"] == "pending":
+                connection.execute(
+                    "UPDATE runs SET status='running',updated_at=? WHERE id=?",
+                    (time.time(), run_id),
+                )
+            elif row["status"] != "running":
+                connection.rollback()
+                raise ValueError("fork is not executable")
+            connection.commit()
+
+    def fork_lineage(self, run_id: str) -> dict[str, Any] | None:
+        """Return verified lineage for a forked run; ordinary runs return ``None``."""
+
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT lineage_json,lineage_digest FROM run_forks WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            value = json.loads(row["lineage_json"])
+        except json.JSONDecodeError as exc:
+            raise ValueError("fork lineage JSON is corrupt") from exc
+        if (
+            not isinstance(value, dict)
+            or hashlib.sha256(canonical_json(value)).hexdigest()
+            != row["lineage_digest"]
+        ):
+            raise ValueError("fork lineage digest mismatch")
+        return value
 
     def acquire_lease(
         self,

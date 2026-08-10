@@ -238,6 +238,47 @@ does not inspect process command lines, print private profile values, mutate Her
 visual workflow editor. At most 100 lanes and 16 artifact digests per lane are emitted; omissions
 are counted.
 
+### Reconnectable event consumption
+
+Prime, Herdr, CI, and other observers should consume the generic lifecycle stream rather than own
+graph state or scheduling:
+
+```bash
+graph-engineer events --state /path/to/state.db --run-id auth-audit-001 \
+  --limit 100 --wait 20 --json
+
+graph-engineer events --state /path/to/state.db --run-id auth-audit-001 \
+  --cursor '<next_cursor>' --limit 100 --wait 20 --json
+```
+
+Each call returns at most 256 already-redacted typed lifecycle events, an opaque cursor, `has_more`,
+`timed_out`, and `terminal`. A consumer acknowledges a batch by using its `next_cursor`; reconnects
+therefore neither skip nor duplicate accepted events. The cursor binds the run, sequence, and event
+digest and fails closed across runs or after history corruption. Long polling is capped at 30
+seconds. Consumers should drain while `has_more` is true, back off after `timed_out`, and stop after
+`terminal`; this pull contract provides backpressure without giving Prime or Herdr write authority.
+
+### Immutable run forks
+
+Create a fresh run from a prior quiescent checkpoint without editing or cloning mutable execution
+state:
+
+```bash
+graph-engineer fork --state /path/to/state.db \
+  --run-id auth-audit-001 --at-sequence 42 --new-run-id auth-audit-experiment-002 --json
+
+graph-engineer run workflow.json --repo "$PWD" --state /path/to/state.db \
+  --run-id auth-audit-experiment-002 --resume --json
+```
+
+The fork binds the exact parent event and context plus base, workflow, profile, artifact-snapshot,
+and receipt-snapshot digests. The child starts with pending nodes and its own budgets, lease,
+attempts, artifacts, receipts, and hash chain; its first event is `run.forked`. Fork creation rejects
+non-settlement events, in-flight attempts, prior non-replay-safe effects, missing or corrupt
+artifacts/receipts, and malformed execution identity. Resume rebuilds the lineage from the parent
+checkpoint and rejects drift before dispatch. A fork grants no new approval, merge, deployment, or
+external-effect authority.
+
 ## Cross-engine handoff
 
 Export a credential-free handoff from trusted durable state, then give the file plus the same
@@ -284,6 +325,38 @@ a Stop hook or deployment gate.
 Runs created before lifecycle journaling are not silently upgraded during resume. After reviewing
 that legacy state, authorize the one-time marker explicitly with
 `run ... --resume --bootstrap-legacy-lifecycle`; new runs never need this flag.
+
+## Measure outcomes and turn feedback into reviewed improvements
+
+Derive graph metrics from the durable state and lifecycle rather than asking a model to estimate
+them:
+
+```bash
+graph-engineer benchmark --state /path/to/state.db --run-id auth-audit-001 --json
+graph-engineer benchmark --state /path/to/state.db --run-id auth-audit-001 \
+  --baseline /secure/path/ordinary-session.json --output /secure/path/comparison.json --json
+```
+
+The report includes wall time, time to first accepted artifact, retries, rejected attempts,
+repeated failures, deterministic-gate rejections, useful overlap, and critical-path utilization.
+Metrics that the runtime cannot prove—human corrections, independent-verifier overturns, and time
+to merged/deployed/live proof—remain `null` until supplied by separately reviewed evidence. A
+baseline is a strict `graph-engineering/baseline/v1` JSON record; comparison never fabricates
+missing measurements.
+
+Human, test, verifier, or runtime feedback can be compiled into a non-applying proposal:
+
+```bash
+graph-engineer feedback --input /secure/path/feedback.json \
+  --output /secure/path/learning-proposal.json --json
+```
+
+`graph-engineering/feedback/v1` items target a regression test, project decision, workflow, or the
+local graph-engineering skill. Regression targets require a shell-free verification argv and a
+sabotage check. Product decisions invalidate the frozen generation; workflows require validation;
+skill targets remain local reviewed proposals. The compiler rejects credential-shaped content and
+always emits `auto_apply=false`, `auto_share_skills=false`, and named-human review. It never edits a
+test, decision, workflow, or skill by itself.
 
 ## Deliberate limits
 

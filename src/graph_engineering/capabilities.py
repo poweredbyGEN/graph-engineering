@@ -9,7 +9,13 @@ from . import __version__
 from .compilation import PROPOSAL_VERSION
 from .config import CAPABILITY_NAMES
 from .contracts import WORKFLOW_VERSION, workflow_schema
-from .lifecycle import CONTEXT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION
+from .learning import BENCHMARK_VERSION, LEARNING_PROPOSAL_VERSION
+from .forking import FORK_VERSION
+from .lifecycle import (
+    CONTEXT_SCHEMA_VERSION,
+    EVENT_SCHEMA_VERSION,
+    EVENT_STREAM_VERSION,
+)
 from .project import ASSESSMENT_VERSION, PRODUCT_CONTRACT_VERSION, PROJECT_VERSION
 from .session_ux import HANDOFF_VERSION, STATUS_PROJECTION_VERSION
 
@@ -41,6 +47,10 @@ def capability_manifest(cli_commands: Sequence[str]) -> dict[str, Any]:
             "run_context": CONTEXT_SCHEMA_VERSION,
             "handoff": HANDOFF_VERSION,
             "status_projection": STATUS_PROJECTION_VERSION,
+            "benchmark": BENCHMARK_VERSION,
+            "learning_proposal": LEARNING_PROPOSAL_VERSION,
+            "run_fork": FORK_VERSION,
+            "event_stream": EVENT_STREAM_VERSION,
         },
         "cli_commands": sorted(set(cli_commands)),
         "runtime": {
@@ -87,6 +97,10 @@ def capability_manifest(cli_commands: Sequence[str]) -> dict[str, Any]:
             "visual_builder": False,
             "self_generated_workflows": False,
             "reviewed_workflow_compilation": True,
+            "outcome_benchmarking": True,
+            "reviewed_feedback_learning": True,
+            "immutable_run_forks": True,
+            "bounded_event_stream": True,
         },
     }
 

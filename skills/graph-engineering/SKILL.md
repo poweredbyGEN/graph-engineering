@@ -186,8 +186,16 @@ Report:
 - exact deterministic commands and their results;
 - verifier findings and integration outcome;
 - wall time, useful overlap, token/cost data when available;
+- evidence-bound benchmark metrics, leaving unavailable human/review/deploy measurements null;
 - the versioned lifecycle trace and exact join settlement that released each quorum consumer;
 - remaining blockers or unverified assumptions.
+
+After material human feedback or a failed/overturned check, compile it with
+`graph-engineer feedback` into a reviewed regression-test, project-decision, workflow, or local
+skill proposal. Prefer a sabotage-capable regression whenever a command can enforce the lesson.
+Never auto-apply feedback, silently rewrite a frozen product generation, or share a skill proposal.
+Use `graph-engineer benchmark` to compare evidence-bound graph outcomes with a separately recorded
+ordinary-session baseline; never fill unavailable metrics with model estimates.
 
 Say whether the result is implemented, integrated, merged, deployed, and verified live. These are
 different states. Never call a plan, agent message, green lane, or open pull request “done.”

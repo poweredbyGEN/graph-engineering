@@ -8,6 +8,7 @@ import re
 import sqlite3
 import threading
 import time
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,10 +25,15 @@ MAX_ITEMS = 256
 MAX_STRING_BYTES = 16_384
 DEFAULT_TRACE_LIMIT = 500
 MAX_TRACE_LIMIT = 5_000
+EVENT_STREAM_VERSION = "graph-engineering.event-stream/v1"
+DEFAULT_STREAM_LIMIT = 100
+MAX_STREAM_LIMIT = 256
+MAX_STREAM_WAIT_SECONDS = 30.0
 
 EVENT_TYPES = frozenset(
     {
         "run.started",
+        "run.forked",
         "run.legacy_bootstrapped",
         "run.resumed",
         "run.succeeded",
@@ -57,6 +63,10 @@ EVENT_TYPES = frozenset(
         "join.decided",
         "cancel.requested",
     }
+)
+
+_TERMINAL_RUN_STATUSES = frozenset(
+    {"succeeded", "failed", "cancelled", "needs_reconciliation"}
 )
 
 _SENSITIVE_KEY = re.compile(
@@ -205,6 +215,37 @@ def _decode_json(raw: str, *, code: str) -> Any:
         return json.loads(raw)
     except (TypeError, json.JSONDecodeError) as exc:
         raise LifecycleError(code, "persisted lifecycle JSON is invalid") from exc
+
+
+def _encode_cursor(run_id: str, sequence: int, digest: str) -> str:
+    payload = canonical_json(
+        {
+            "version": EVENT_STREAM_VERSION,
+            "run_id": run_id,
+            "sequence": sequence,
+            "digest": digest,
+        }
+    )
+    return urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_cursor(cursor: str, run_id: str) -> tuple[int, str]:
+    try:
+        padding = "=" * (-len(cursor) % 4)
+        value = json.loads(urlsafe_b64decode(cursor + padding))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LifecycleError("STREAM_CURSOR_INVALID", "cursor is malformed") from exc
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"version", "run_id", "sequence", "digest"}
+        or value["version"] != EVENT_STREAM_VERSION
+        or value["run_id"] != run_id
+        or not isinstance(value["sequence"], int)
+        or value["sequence"] < 0
+        or not isinstance(value["digest"], str)
+    ):
+        raise LifecycleError("STREAM_CURSOR_INVALID", "cursor identity is invalid")
+    return value["sequence"], value["digest"]
 
 
 def _event_from_row(row: sqlite3.Row) -> LifecycleEvent:
@@ -493,12 +534,41 @@ class LifecycleStore:
                 "UPDATE runs SET lifecycle_state='active' WHERE id=?", (run_id,)
             )
             legacy = run["lifecycle_state"] == "legacy"
+            fork = values.get("fork_lineage")
+            forked = isinstance(fork, Mapping)
             append_event_connection(
                 connection,
                 run_id,
-                "run:legacy-bootstrap" if legacy else "run:started",
-                "run.legacy_bootstrapped" if legacy else "run.started",
-                payload={"workflow_id": run["workflow_id"]},
+                (
+                    "run:legacy-bootstrap"
+                    if legacy
+                    else "run:forked"
+                    if forked
+                    else "run:started"
+                ),
+                (
+                    "run.legacy_bootstrapped"
+                    if legacy
+                    else "run.forked"
+                    if forked
+                    else "run.started"
+                ),
+                payload={
+                    "workflow_id": run["workflow_id"],
+                    **(
+                        {
+                            "parent_run_id": fork.get("parent_run_id"),
+                            "parent_event_sequence": fork.get("parent_event", {}).get(
+                                "sequence"
+                            ),
+                            "parent_event_digest": fork.get("parent_event", {}).get(
+                                "digest"
+                            ),
+                        }
+                        if forked
+                        else {}
+                    ),
+                },
                 created_at=now,
             )
             context, _events = _read_active_snapshot(connection, run_id)
@@ -567,10 +637,75 @@ class LifecycleStore:
             "events": [event.as_dict() for event in selected],
         }
 
+    def stream(
+        self,
+        run_id: str,
+        *,
+        cursor: str | None = None,
+        limit: int = DEFAULT_STREAM_LIMIT,
+        wait_seconds: float = 0,
+    ) -> dict[str, Any]:
+        """Return one bounded, reconnectable batch for neutral event consumers."""
+
+        if not 1 <= limit <= MAX_STREAM_LIMIT:
+            raise LifecycleError(
+                "STREAM_LIMIT_INVALID", f"limit must be 1..{MAX_STREAM_LIMIT}"
+            )
+        if not 0 <= wait_seconds <= MAX_STREAM_WAIT_SECONDS:
+            raise LifecycleError(
+                "STREAM_WAIT_INVALID",
+                f"wait must be 0..{MAX_STREAM_WAIT_SECONDS:g} seconds",
+            )
+        sequence, digest = (
+            _decode_cursor(cursor, run_id)
+            if cursor is not None
+            else (0, GENESIS_DIGEST)
+        )
+        deadline = time.monotonic() + wait_seconds
+        timed_out = False
+        while True:
+            _context, events = self.snapshot(run_id)
+            if sequence > len(events):
+                raise LifecycleError(
+                    "STREAM_CURSOR_INVALID", "cursor is ahead of the lifecycle head"
+                )
+            expected = GENESIS_DIGEST if sequence == 0 else events[sequence - 1].digest
+            if digest != expected:
+                raise LifecycleError(
+                    "STREAM_CURSOR_STALE",
+                    "cursor digest does not match lifecycle history",
+                )
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT status FROM runs WHERE id=?", (run_id,)
+                ).fetchone()
+            if row is None:
+                raise KeyError(f"unknown run {run_id}")
+            available = events[sequence:]
+            terminal_status = row["status"] in _TERMINAL_RUN_STATUSES
+            if available or terminal_status or time.monotonic() >= deadline:
+                timed_out = not available and not terminal_status and wait_seconds > 0
+                break
+            time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+        selected = available[:limit]
+        next_sequence = selected[-1].sequence if selected else sequence
+        next_digest = selected[-1].digest if selected else digest
+        has_more = len(available) > len(selected)
+        return {
+            "version": EVENT_STREAM_VERSION,
+            "run_id": run_id,
+            "events": [event.as_dict() for event in selected],
+            "next_cursor": _encode_cursor(run_id, next_sequence, next_digest),
+            "has_more": has_more,
+            "terminal": terminal_status and not has_more,
+            "timed_out": timed_out,
+        }
+
 
 __all__ = [
     "CONTEXT_SCHEMA_VERSION",
     "EVENT_SCHEMA_VERSION",
+    "EVENT_STREAM_VERSION",
     "EVENT_TYPES",
     "LifecycleError",
     "LifecycleEvent",

@@ -6,7 +6,14 @@ from graph_engineering import __version__, cli
 from graph_engineering.capabilities import CAPABILITIES_VERSION
 from graph_engineering.compilation import PROPOSAL_VERSION
 from graph_engineering.contracts import WORKFLOW_VERSION, workflow_schema
+from graph_engineering.learning import BENCHMARK_VERSION, LEARNING_PROPOSAL_VERSION
 from graph_engineering.lifecycle import CONTEXT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION
+from graph_engineering.forking import FORK_VERSION
+from graph_engineering.lifecycle import (
+    CONTEXT_SCHEMA_VERSION,
+    EVENT_SCHEMA_VERSION,
+    EVENT_STREAM_VERSION,
+)
 from graph_engineering.project import (
     ASSESSMENT_VERSION,
     PRODUCT_CONTRACT_VERSION,
@@ -43,11 +50,19 @@ def test_capability_manifest_matches_parser_schema_and_runtime_constants(capsys)
         "run_context": CONTEXT_SCHEMA_VERSION,
         "handoff": HANDOFF_VERSION,
         "status_projection": STATUS_PROJECTION_VERSION,
+        "benchmark": BENCHMARK_VERSION,
+        "learning_proposal": LEARNING_PROPOSAL_VERSION,
+        "run_fork": FORK_VERSION,
+        "event_stream": EVENT_STREAM_VERSION,
     }
     assert manifest["features"]["worker_smoke"] is True
+    assert manifest["features"]["immutable_run_forks"] is True
+    assert manifest["features"]["bounded_event_stream"] is True
     assert manifest["features"]["visual_builder"] is False
     assert manifest["features"]["reviewed_workflow_compilation"] is True
     assert manifest["features"]["self_generated_workflows"] is False
     assert manifest["runtime"]["typed_profile_fallback"] is True
+    assert manifest["features"]["outcome_benchmarking"] is True
+    assert manifest["features"]["reviewed_feedback_learning"] is True
     assert manifest["transports"]["mcp"]["available"] is True
     assert manifest["transports"]["a2a"]["available"] is True

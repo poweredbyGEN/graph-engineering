@@ -41,6 +41,10 @@ REQUIRED_CAPABILITY_COMMANDS = frozenset(
         "capabilities",
         "compile",
         "doctor",
+        "capabilities",
+        "doctor",
+        "events",
+        "fork",
         "plan",
         "run",
         "status",
@@ -343,6 +347,10 @@ def assert_installed_capabilities(output: str, expected_version: str) -> None:
         "run_context",
         "handoff",
         "status_projection",
+        "benchmark",
+        "learning_proposal",
+        "run_fork",
+        "event_stream",
     }
     if set(schemas) != required_schemas or any(
         not isinstance(value, str) or not value for value in schemas.values()
@@ -356,6 +364,10 @@ def assert_installed_capabilities(output: str, expected_version: str) -> None:
         )
     if manifest.get("runtime", {}).get("typed_profile_fallback") is not True:
         raise GateError("installed capability manifest omits typed profile fallback")
+    if manifest.get("features", {}).get("immutable_run_forks") is not True:
+        raise GateError("installed capability manifest omits immutable run forks")
+    if manifest.get("features", {}).get("bounded_event_stream") is not True:
+        raise GateError("installed capability manifest omits bounded event stream")
 
 
 def build_and_smoke(scratch: Path) -> tuple[Path, Path]:
