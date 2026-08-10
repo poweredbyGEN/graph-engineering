@@ -12,6 +12,7 @@ from graph_engineering.public_safety import (
     _commit_metadata_rules,
     load_extra_rules,
     main,
+    resolve_trusted_candidate_base,
     scan_candidate_commit_metadata,
     scan_history,
     scan_worktree,
@@ -171,6 +172,24 @@ def test_candidate_metadata_ignores_unsafe_legacy_base_and_accepts_safe_candidat
     assert scan_candidate_commit_metadata(repo, trusted_base=base) == []
 
 
+def test_default_branch_push_uses_first_parent_when_woodpecker_omits_before_sha(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = make_repo(tmp_path)
+    use_safe_commit_identity(repo)
+    commit(repo, "base.txt", b"base\n")
+    commit(repo, "candidate.txt", b"candidate\n")
+    git(repo, "update-ref", "refs/remotes/origin/main", head(repo))
+    monkeypatch.setenv("CI_PIPELINE_EVENT", "push")
+    monkeypatch.setenv("CI_COMMIT_BRANCH", "main")
+    monkeypatch.setenv("CI_REPO_DEFAULT_BRANCH", "main")
+    monkeypatch.delenv("CI_COMMIT_TARGET_BRANCH", raising=False)
+    monkeypatch.delenv("CI_COMMIT_BEFORE_SHA", raising=False)
+
+    assert resolve_trusted_candidate_base(repo) == "HEAD^"
+    assert scan_candidate_commit_metadata(repo, trusted_base="HEAD^") == []
+
+
 def test_candidate_metadata_rejects_unapproved_person_identity(tmp_path: Path) -> None:
     repo = make_repo(tmp_path)
     use_safe_commit_identity(repo)
@@ -261,6 +280,30 @@ def test_candidate_metadata_accepts_exact_project_approved_generic_identity(
             allowed_emails=["release@example.org"],
         )
         == []
+    )
+
+
+def test_candidate_metadata_accepts_github_generic_committer() -> None:
+    raw = (
+        b"tree "
+        + b"0" * 40
+        + b"\nauthor poweredbyGEN <poweredbygen@users.noreply.github.com> 1 +0000"
+        + b"\ncommitter GitHub <noreply@github.com> 1 +0000"
+        + b"\n\ncandidate"
+    )
+
+    # intent: rebase-merging preserves the safe author and uses GitHub's generic
+    # committer, avoiding a human display name in new public commit metadata.
+    assert (
+        _commit_metadata_rules(
+            raw,
+            allowed_names=frozenset({"poweredbyGEN", "GitHub"}),
+            allowed_emails=frozenset(),
+            rules=(),
+            max_commit_bytes=1_000,
+            max_message_bytes=1_000,
+        )
+        == set()
     )
 
 

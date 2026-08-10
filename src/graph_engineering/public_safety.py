@@ -32,10 +32,16 @@ TRUSTED_COMMIT_BASE_ENV = "GRAPH_ENGINEERING_TRUSTED_COMMIT_BASE"
 # These are public project/service identities, not people. Operators may add an exact
 # project-approved generic identity at the CLI boundary; no personal identity is inferred.
 DEFAULT_ALLOWED_COMMIT_NAMES = frozenset(
-    {"poweredbyGEN", "Graph Engineering", "github-actions[bot]", "dependabot[bot]"}
+    {
+        "poweredbyGEN",
+        "Graph Engineering",
+        "GitHub",
+        "github-actions[bot]",
+        "dependabot[bot]",
+    }
 )
 _GITHUB_NOREPLY_EMAIL = re.compile(
-    r"(?i)^[a-z0-9][a-z0-9._+-]*@users\.noreply\.github\.com$"
+    r"(?i)^(?:[a-z0-9][a-z0-9._+-]*@users\.noreply\.github\.com|noreply@github\.com)$"
 )
 _MESSAGE_EMAIL = re.compile(
     r"(?i)(?<![a-z0-9._+-])([a-z0-9][a-z0-9._+-]*@[a-z0-9.-]+\.[a-z]{2,})(?![a-z0-9.-])"
@@ -152,9 +158,11 @@ def resolve_trusted_candidate_base(repo: Path, explicit: str | None = None) -> s
 
     An explicit argument wins, followed by the dedicated release environment variable,
     Woodpecker's pull-request target, and Woodpecker's pre-push SHA. Outside CI a feature
-    checkout may use ``origin/main`` only when it differs from ``HEAD``. A merged checkout
-    must name its prior reviewed base explicitly, which prevents an empty range from
-    masquerading as release evidence.
+    checkout may use ``origin/main`` only when it differs from ``HEAD``. Woodpecker does
+    not currently expose the pre-push SHA on default-branch push pipelines, so their
+    first parent is the reviewed base. Other merged checkouts must name their prior
+    reviewed base explicitly, which prevents an empty range from masquerading as
+    release evidence.
     """
 
     if explicit:
@@ -173,6 +181,13 @@ def resolve_trusted_candidate_base(repo: Path, explicit: str | None = None) -> s
         raise ScanError("trusted candidate base is required") from exc
     if main != head:
         return "origin/main"
+    if os.environ.get("CI_PIPELINE_EVENT") == "push" and os.environ.get(
+        "CI_COMMIT_BRANCH"
+    ) == os.environ.get("CI_REPO_DEFAULT_BRANCH"):
+        # intent: Woodpecker push payloads omit CI_COMMIT_BEFORE_SHA. The first
+        # parent is safe only for the fetched default-branch head, proved above.
+        _resolve_commit(repo, "HEAD^")
+        return "HEAD^"
     raise ScanError("trusted candidate base is required")
 
 
