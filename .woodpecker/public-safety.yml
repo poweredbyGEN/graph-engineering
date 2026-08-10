@@ -9,11 +9,13 @@ steps:
       - uv sync --frozen --extra dev
       - uv run pytest -q tests/test_public_safety.py
       - uv run python -m graph_engineering.public_safety --repo . --mode tree
+      # intent: Woodpecker clones with --filter=tree:0. Hydrate every tree and
+      # every blob the scanner can accept before the bounded history scan.
       - >-
         if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
-          git fetch --unshallow --tags origin '+refs/heads/*:refs/remotes/origin/*';
+          git fetch --unshallow --tags --filter=blob:limit=16777217 origin '+refs/heads/*:refs/remotes/origin/*';
         else
-          git fetch --force --tags origin '+refs/heads/*:refs/remotes/origin/*';
+          git fetch --force --tags --filter=blob:limit=16777217 origin '+refs/heads/*:refs/remotes/origin/*';
         fi
       - uv run python -m graph_engineering.public_safety --repo . --mode history
       - uv run python -m graph_engineering.public_safety --repo . --mode candidate-metadata

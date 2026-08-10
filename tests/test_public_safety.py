@@ -4,8 +4,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from graph_engineering.public_safety import (
+    DEFAULT_MAX_ITEM_BYTES,
     ScanError,
     _commit_metadata_rules,
     load_extra_rules,
@@ -303,3 +305,21 @@ def test_candidate_metadata_rejects_controls_and_oversized_fields() -> None:
         max_commit_bytes=10,
         max_message_bytes=1_000,
     ) == {"commit-size-policy"}
+
+
+@pytest.mark.parametrize("pipeline_name", ["packaging.yml", "public-safety.yml"])
+def test_history_scan_pipelines_hydrate_woodpecker_partial_clone(
+    pipeline_name: str,
+) -> None:
+    pipeline = yaml.safe_load(
+        (Path(__file__).parents[1] / ".woodpecker" / pipeline_name).read_text()
+    )
+    commands = pipeline["steps"][next(iter(pipeline["steps"]))]["commands"]
+    hydrate = next(
+        command for command in commands if "git fetch --unshallow" in command
+    )
+    blob_limit = DEFAULT_MAX_ITEM_BYTES + 1
+
+    # intent: Woodpecker's --filter=tree:0 clone must not turn rev-list into
+    # hundreds of lazy network fetches that exceed the scanner's 120s bound.
+    assert hydrate.count(f"--filter=blob:limit={blob_limit} origin ") == 2

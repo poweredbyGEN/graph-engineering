@@ -8,11 +8,14 @@ steps:
       - >-
         apt-get update && apt-get install -y --no-install-recommends
         bubblewrap git strace util-linux
+      # intent: Woodpecker clones with --filter=tree:0. An unfiltered-looking
+      # unshallow fetch inherits that partial-clone filter, so rev-list lazily
+      # downloads every tree and hits the public-safety timeout.
       - >-
         if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
-          git fetch --unshallow --tags origin '+refs/heads/*:refs/remotes/origin/*';
+          git fetch --unshallow --tags --filter=blob:limit=16777217 origin '+refs/heads/*:refs/remotes/origin/*';
         else
-          git fetch --force --tags origin '+refs/heads/*:refs/remotes/origin/*';
+          git fetch --force --tags --filter=blob:limit=16777217 origin '+refs/heads/*:refs/remotes/origin/*';
         fi
       - mkdir -p /var/tmp/graph-engineering-release
       - export TMPDIR=/var/tmp/graph-engineering-release
