@@ -9,8 +9,8 @@ from . import __version__
 from .compilation import PROPOSAL_VERSION
 from .config import CAPABILITY_NAMES
 from .contracts import WORKFLOW_VERSION, workflow_schema
-from .learning import BENCHMARK_VERSION, LEARNING_PROPOSAL_VERSION
 from .forking import FORK_VERSION
+from .learning import BENCHMARK_VERSION, LEARNING_PROPOSAL_VERSION
 from .lifecycle import (
     CONTEXT_SCHEMA_VERSION,
     EVENT_SCHEMA_VERSION,

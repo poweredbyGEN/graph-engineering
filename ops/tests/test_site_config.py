@@ -13,16 +13,22 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import site_config  # noqa: E402
+import site_config
 
 
-def test_a_fresh_clone_with_no_config_still_resolves_every_setting(monkeypatch, tmp_path):
+def test_a_fresh_clone_with_no_config_still_resolves_every_setting(
+    monkeypatch, tmp_path
+):
     # intent: THE portability property. A clone with no config.toml must run rather than
     # crash — otherwise the first thing a new user meets is a traceback.
     monkeypatch.setattr(site_config, "_FILE", {})
-    for section, key in [("paths", "projects"), ("paths", "scratch"),
-                         ("graph", "min_commits_30d"), ("limits", "min_free_gb"),
-                         ("adoption", "stale_weeks")]:
+    for section, key in [
+        ("paths", "projects"),
+        ("paths", "scratch"),
+        ("graph", "min_commits_30d"),
+        ("limits", "min_free_gb"),
+        ("adoption", "stale_weeks"),
+    ]:
         assert site_config.get(section, key) is not None
 
 
@@ -53,8 +59,9 @@ def test_a_comma_list_in_the_environment_parses_to_a_list(monkeypatch):
     # intent: environment variables are strings. Without this, a configured list arrives as
     # one string and `x in list` matches SUBSTRINGS — "acme/web" would match "acme/web-api".
     monkeypatch.setenv("AGENT_INFRA_EXTERNALLY_MANAGED", "a/b, c/d ,e/f")
-    assert site_config.get("graph", "externally_managed",
-                           "AGENT_INFRA_EXTERNALLY_MANAGED") == ["a/b", "c/d", "e/f"]
+    assert site_config.get(
+        "graph", "externally_managed", "AGENT_INFRA_EXTERNALLY_MANAGED"
+    ) == ["a/b", "c/d", "e/f"]
 
 
 def test_an_empty_optional_path_is_None_not_the_current_directory(monkeypatch):
@@ -69,6 +76,7 @@ def test_a_non_integer_environment_value_fails_loudly(monkeypatch):
     # intent: silently falling back to a default would run with the operator's setting
     # ignored and report success — the worst of both.
     import pytest
+
     monkeypatch.setenv("AGENT_INFRA_MIN_FREE", "not-a-number")
     with pytest.raises(SystemExit):
         site_config.get("limits", "min_free_gb", "AGENT_INFRA_MIN_FREE")

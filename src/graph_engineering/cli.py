@@ -40,6 +40,7 @@ from .contracts import (
     WorkflowValidationError,
     validate_workflow,
 )
+from .forking import FORK_VERSION, ForkError, create_fork
 from .learning import (
     LearningError,
     benchmark_run,
@@ -47,7 +48,6 @@ from .learning import (
     compile_feedback,
     load_baseline,
 )
-from .forking import FORK_VERSION, ForkError, create_fork
 from .lifecycle import LifecycleError, LifecycleStore
 from .orchestrator import (
     CheckCommandReceipt,
@@ -1454,6 +1454,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             exit_code = 0
         elif args.command == "accept":
             payload = _accept(args)
+            exit_code = 0
         elif args.command == "benchmark":
             payload = _benchmark(args)
             exit_code = 0

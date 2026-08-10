@@ -7,7 +7,6 @@ import re
 import sys
 from pathlib import Path
 
-
 NAME_RE = re.compile(r"^[a-z0-9-]{1,64}$")
 LINK_RE = re.compile(r"\[[^]]+\]\(([^)]+)\)")
 
@@ -50,7 +49,9 @@ def validate(skill_dir: Path) -> list[str]:
         errors.append(f"skill name {name!r} must match directory {skill_dir.name!r}")
     description = meta.get("description", "")
     if len(description) < 80 or "Use when" not in description:
-        errors.append("description must explain the capability and concrete trigger conditions")
+        errors.append(
+            "description must explain the capability and concrete trigger conditions"
+        )
     if "TODO" in text:
         errors.append("skill contains an unresolved TODO")
     if len(text.splitlines()) > 500:
@@ -84,7 +85,11 @@ def validate(skill_dir: Path) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
-    root = Path(args[0]) if args else Path(__file__).resolve().parents[1] / "skills" / "graph-engineering"
+    root = (
+        Path(args[0])
+        if args
+        else Path(__file__).resolve().parents[1] / "skills" / "graph-engineering"
+    )
     errors = validate(root)
     if errors:
         for error in errors:

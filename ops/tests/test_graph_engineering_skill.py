@@ -6,8 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from check_graph_engineering_skill import validate  # noqa: E402
-
+from check_graph_engineering_skill import validate
 
 SOURCE = Path(__file__).resolve().parents[2] / "skills" / "graph-engineering"
 

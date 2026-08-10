@@ -26,8 +26,8 @@ Read-only. Reports; changes nothing.
 
 from __future__ import annotations
 
-import re
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -46,12 +46,14 @@ SUITES = {
 # `N tests`, and also a BARE `# N` trailing a pytest command -- SETUP.md writes
 # `... pytest tests/ -q           # 17`, which says nothing about "tests" and so slipped
 # past a naive pattern while being just as wrong.
-CLAIM = re.compile(r"(\d+)\s+tests?\b", re.I)
+CLAIM = re.compile(r"(\d+)\s+tests?\b", re.IGNORECASE)
 
 # Phrases where a number next to "test" counts something OTHER than tests -- "6 of 9
 # test-count claims" is a count of CLAIMS. Flagging those trains people to ignore the
 # checker, which is worse than not having one.
-NOT_A_COUNT = re.compile(r"\btest-count\b|\bof \d+ test\b|\btest count\b", re.I)
+NOT_A_COUNT = re.compile(
+    r"\btest-count\b|\bof \d+ test\b|\btest count\b", re.IGNORECASE
+)
 BARE_CLAIM = re.compile(r"pytest\b.*#\s*(\d+)\s*$")
 
 
@@ -61,8 +63,14 @@ def collected(suite: str) -> int | None:
     try:
         p = subprocess.run(
             [sys.executable, "-m", "pytest", "tests/", "-q", "--collect-only"],
-            cwd=ROOT / suite, capture_output=True, text=True, timeout=300, env=env)
-    except Exception:
+            cwd=ROOT / suite,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            env=env,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
         return None
     if p.returncode != 0:
         return None
@@ -97,16 +105,27 @@ def main() -> int:
     total = sum(v for v in truth.values() if v)
     missing = [s for s, v in truth.items() if v is None]
     if missing:
-        print(f"FAIL: could not collect tests for {', '.join(missing)} — "
-              f"cannot verify any claim against a suite that will not run.", file=sys.stderr)
+        print(
+            f"FAIL: could not collect tests for {', '.join(missing)} — "
+            f"cannot verify any claim against a suite that will not run.",
+            file=sys.stderr,
+        )
         return 1
 
-    print("actual:", "  ".join(f"{s.split('/')[-1]}={v}" for s, v in truth.items()),
-          f"  TOTAL={total}")
+    print(
+        "actual:",
+        "  ".join(f"{s.split('/')[-1]}={v}" for s, v in truth.items()),
+        f"  TOTAL={total}",
+    )
 
     wrong, unattributed = [], []
-    files = subprocess.run(["git", "ls-files", "*.md"], cwd=ROOT,
-                           capture_output=True, text=True).stdout.split()
+    files = subprocess.run(
+        ["git", "ls-files", "*.md"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.split()
     for rel in files:
         p = ROOT / rel
         lines = p.read_text(errors="ignore").splitlines()
@@ -120,7 +139,7 @@ def main() -> int:
             claims += [int(m.group(1)) for m in BARE_CLAIM.finditer(line)]
             for claimed in claims:
                 # Look back a few lines: code blocks put `cd <suite>` above the count.
-                context = lines[max(0, i - 5):i - 1]
+                context = lines[max(0, i - 5) : i - 1]
                 suite = attribute(line, Path(rel), context)
                 # A claim matching the TOTAL is a total, whatever suite name happens to sit
                 # above it. Without this, "51 tests" summarising a code block gets blamed on
@@ -136,16 +155,23 @@ def main() -> int:
                     unattributed.append((rel, i, claimed, line.strip()[:70]))
                     continue
                 if claimed != truth[suite]:
-                    wrong.append((rel, i, claimed, truth[suite], suite, line.strip()[:60]))
+                    wrong.append(
+                        (rel, i, claimed, truth[suite], suite, line.strip()[:60])
+                    )
 
     for rel, i, claimed, actual, suite, txt in wrong:
-        print(f"  STALE {rel}:{i} claims {claimed} for {suite}, actual {actual}", file=sys.stderr)
+        print(
+            f"  STALE {rel}:{i} claims {claimed} for {suite}, actual {actual}",
+            file=sys.stderr,
+        )
     for rel, i, claimed, txt in unattributed:
         print(f"  unattributed (not failing): {rel}:{i} '{claimed} tests' — {txt}")
 
     if wrong:
-        print(f"\nFAIL: {len(wrong)} stale test-count claim(s). Update the prose or the tests.",
-              file=sys.stderr)
+        print(
+            f"\nFAIL: {len(wrong)} stale test-count claim(s). Update the prose or the tests.",
+            file=sys.stderr,
+        )
         return 1
     print("PASS: every attributed test-count claim matches the suites.")
     return 0

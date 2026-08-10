@@ -78,5 +78,9 @@ def path(section: str, key: str, env: str | None = None) -> Path | None:
 
 
 def describe() -> str:
-    src = str(CONFIG_PATH) if CONFIG_PATH.exists() else "(no config.toml — using defaults)"
+    src = (
+        str(CONFIG_PATH)
+        if CONFIG_PATH.exists()
+        else "(no config.toml — using defaults)"
+    )
     return f"config: {src}"

@@ -185,6 +185,10 @@ def test_default_branch_push_uses_first_parent_when_woodpecker_omits_before_sha(
     monkeypatch.setenv("CI_REPO_DEFAULT_BRANCH", "main")
     monkeypatch.delenv("CI_COMMIT_TARGET_BRANCH", raising=False)
     monkeypatch.delenv("CI_COMMIT_BEFORE_SHA", raising=False)
+    # intent: an operator running the release gate exports the trusted-base
+    # env; without isolating it here the test asserts on THEIR value, not the
+    # first-parent fallback under test.
+    monkeypatch.delenv("GRAPH_ENGINEERING_TRUSTED_COMMIT_BASE", raising=False)
 
     assert resolve_trusted_candidate_base(repo) == "HEAD^"
     assert scan_candidate_commit_metadata(repo, trusted_base="HEAD^") == []

@@ -6,9 +6,8 @@ from graph_engineering import __version__, cli
 from graph_engineering.capabilities import CAPABILITIES_VERSION
 from graph_engineering.compilation import PROPOSAL_VERSION
 from graph_engineering.contracts import WORKFLOW_VERSION, workflow_schema
-from graph_engineering.learning import BENCHMARK_VERSION, LEARNING_PROPOSAL_VERSION
-from graph_engineering.lifecycle import CONTEXT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION
 from graph_engineering.forking import FORK_VERSION
+from graph_engineering.learning import BENCHMARK_VERSION, LEARNING_PROPOSAL_VERSION
 from graph_engineering.lifecycle import (
     CONTEXT_SCHEMA_VERSION,
     EVENT_SCHEMA_VERSION,

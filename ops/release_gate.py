@@ -41,8 +41,6 @@ REQUIRED_CAPABILITY_COMMANDS = frozenset(
         "capabilities",
         "compile",
         "doctor",
-        "capabilities",
-        "doctor",
         "events",
         "fork",
         "plan",
