@@ -31,6 +31,21 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/graph_engineering"]
 
+# sdists are built from the WORKING DIRECTORY, not from git: without an explicit
+# allowlist they sweep in untracked local files (session notes, private worktrees,
+# personal docs). Only these reviewed, tracked paths may ship.
+[tool.hatch.build.targets.sdist]
+only-include = [
+  "src",
+  "tests",
+  "README.md",
+  "LICENSE",
+  "NOTICE.md",
+  "CHANGELOG.md",
+  "SECURITY.md",
+  "CONTRIBUTING.md",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"

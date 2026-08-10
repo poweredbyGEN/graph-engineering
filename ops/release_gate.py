@@ -45,6 +45,7 @@ REQUIRED_CAPABILITY_COMMANDS = frozenset(
         "fork",
         "plan",
         "watch",
+        "stats",
         "run",
         "status",
         "trace",
@@ -305,6 +306,18 @@ def verify_archives(wheel: Path, sdist: Path) -> None:
         _safe_members(sdist_names, sdist.name)
         if any(not (member.isfile() or member.isdir()) for member in members):
             raise GateError("sdist contains a link or special archive member")
+        # A working-directory build must never package local session state or
+        # unreviewed notes; the 2026-08-10 audit found AGENTS.md and .claude/
+        # worktrees inside a locally built sdist.
+        leaked = [
+            name
+            for name in sdist_names
+            if "/.claude/" in f"/{name}"
+            or PurePosixPath(name).parts[-1] in {"AGENTS.md", "CLAUDE.md", "GEMINI.md"}
+            or "config.toml" in PurePosixPath(name).parts[-1]
+        ]
+        if leaked:
+            raise GateError(f"sdist packages local/private files: {sorted(leaked)[:5]}")
         if not any(name.endswith(SCHEMA_SUFFIX) for name in sdist_names):
             raise GateError("sdist is missing the packaged workflow schema")
         root_files = {
@@ -350,6 +363,7 @@ def assert_installed_capabilities(output: str, expected_version: str) -> None:
         "learning_proposal",
         "run_fork",
         "run_watch",
+        "usage_stats",
         "event_stream",
     }
     if set(schemas) != required_schemas or any(
@@ -370,6 +384,8 @@ def assert_installed_capabilities(output: str, expected_version: str) -> None:
         raise GateError("installed capability manifest omits bounded event stream")
     if manifest.get("features", {}).get("live_run_watch") is not True:
         raise GateError("installed capability manifest omits live run watch")
+    if manifest.get("features", {}).get("usage_telemetry") is not True:
+        raise GateError("installed capability manifest omits usage telemetry")
 
 
 def build_and_smoke(scratch: Path) -> tuple[Path, Path]:

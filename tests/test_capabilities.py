@@ -19,6 +19,7 @@ from graph_engineering.project import (
     PROJECT_VERSION,
 )
 from graph_engineering.session_ux import HANDOFF_VERSION, STATUS_PROJECTION_VERSION
+from graph_engineering.usage import USAGE_VERSION
 from graph_engineering.watch import WATCH_VERSION
 
 
@@ -54,11 +55,13 @@ def test_capability_manifest_matches_parser_schema_and_runtime_constants(capsys)
         "learning_proposal": LEARNING_PROPOSAL_VERSION,
         "run_fork": FORK_VERSION,
         "run_watch": WATCH_VERSION,
+        "usage_stats": USAGE_VERSION,
         "event_stream": EVENT_STREAM_VERSION,
     }
     assert manifest["features"]["worker_smoke"] is True
     assert manifest["features"]["immutable_run_forks"] is True
     assert manifest["features"]["live_run_watch"] is True
+    assert manifest["features"]["usage_telemetry"] is True
     assert manifest["features"]["bounded_event_stream"] is True
     assert manifest["features"]["visual_builder"] is False
     assert manifest["features"]["reviewed_workflow_compilation"] is True

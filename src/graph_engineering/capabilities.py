@@ -18,6 +18,7 @@ from .lifecycle import (
 )
 from .project import ASSESSMENT_VERSION, PRODUCT_CONTRACT_VERSION, PROJECT_VERSION
 from .session_ux import HANDOFF_VERSION, STATUS_PROJECTION_VERSION
+from .usage import USAGE_VERSION
 from .watch import WATCH_VERSION
 
 CAPABILITIES_VERSION = "graph-engineering/capabilities/v1"
@@ -52,6 +53,7 @@ def capability_manifest(cli_commands: Sequence[str]) -> dict[str, Any]:
             "learning_proposal": LEARNING_PROPOSAL_VERSION,
             "run_fork": FORK_VERSION,
             "run_watch": WATCH_VERSION,
+            "usage_stats": USAGE_VERSION,
             "event_stream": EVENT_STREAM_VERSION,
         },
         "cli_commands": sorted(set(cli_commands)),
@@ -104,6 +106,7 @@ def capability_manifest(cli_commands: Sequence[str]) -> dict[str, Any]:
             "immutable_run_forks": True,
             "bounded_event_stream": True,
             "live_run_watch": True,
+            "usage_telemetry": True,
         },
     }
 

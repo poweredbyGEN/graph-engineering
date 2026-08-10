@@ -358,6 +358,22 @@ skill targets remain local reviewed proposals. The compiler rejects credential-s
 always emits `auto_apply=false`, `auto_share_skills=false`, and named-human review. It never edits a
 test, decision, workflow, or skill by itself.
 
+## Usage telemetry: `stats`
+
+Every CLI invocation appends one JSON line to a machine-local log
+(`~/.local/share/graph-engineering/usage.jsonl`, override with
+`GRAPH_ENGINEERING_USAGE_LOG`, opt out with `GRAPH_ENGINEERING_NO_USAGE_LOG=1`). Because every
+agent host — Claude, Codex, Grok, Gemini — shells out to the same binary, this log is the one
+place adoption can be counted across all of them. Nothing is uploaded; recording is fail-silent
+so telemetry can never break a command. Set `GRAPH_ENGINEERING_CALLER` to attribute invocations
+to a host tool.
+
+```bash
+graph-engineer stats            # totals by command, repository, day, caller
+graph-engineer stats --days 30  # recent window only
+graph-engineer stats --json
+```
+
 ## Deliberate limits
 
 - The CLI does not draw or edit graphs.

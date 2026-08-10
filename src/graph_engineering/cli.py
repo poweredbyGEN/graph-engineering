@@ -76,6 +76,8 @@ from .session_ux import (
 )
 from .state import StateStore
 from .supervision import analyze_topology, live_topology
+from .usage import record_invocation
+from .usage import summarize as summarize_usage
 from .watch import DEFAULT_WAIT_SECONDS as WATCH_WAIT
 from .watch import HerdrSink, watch_run
 from .worktrees import WorktreeError, WorktreeManager
@@ -1369,6 +1371,15 @@ def _parser() -> argparse.ArgumentParser:
     watch.add_argument("--no-notify", action="store_true")
     watch.add_argument("--json", action="store_true", dest="json_output")
 
+    stats = subparsers.add_parser(
+        "stats",
+        help="summarise local usage telemetry (invocations by command/repo/day)",
+    )
+    stats.add_argument(
+        "--days", type=int, help="only count invocations from the last N days"
+    )
+    stats.add_argument("--json", action="store_true", dest="json_output")
+
     fork = subparsers.add_parser(
         "fork", help="create an immutable fresh run from a verified checkpoint"
     )
@@ -1434,6 +1445,7 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
+    started = time.monotonic()
     try:
         if args.command == "capabilities":
             payload = {
@@ -1502,6 +1514,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "feedback":
             payload = _feedback(args)
             exit_code = 0
+        elif args.command == "stats":
+            payload = {"ok": True, **summarize_usage(days=args.days)}
+            exit_code = 0
         else:
             payload = _status(args)
             exit_code = 0 if payload["ok"] else 1
@@ -1521,6 +1536,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ) as exc:
         payload = _error_payload(args.command, exc)
         exit_code = 2
+    record_invocation(args.command, exit_code, int((time.monotonic() - started) * 1000))
     if args.json_output:
         print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
     else:
