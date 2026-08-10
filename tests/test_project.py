@@ -974,3 +974,39 @@ def test_run_scope_registry_is_atomic_repo_bound_and_resume_exact(tmp_path: Path
         resume=False,
     )
     assert registry.matches(other)[0]["run_id"] == "other-repository"
+
+
+def test_assess_repo_skips_gitlink_submodule_entries(tmp_path: Path):
+    # intent: `git ls-files` lists gitlink (mode 160000) submodule entries as
+    # tracked paths; they are directories on disk and reading one as a file
+    # raised ASSESSMENT_SOURCE_READ, aborting assess on any repo with
+    # submodules (found on dayprotocol/day: contracts/evm/lib/layerzero-v2).
+    repo = bare_repo(tmp_path)
+    head_sha = git(repo, "rev-parse", "HEAD")
+    git(
+        repo,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        f"160000,{head_sha},vendor/subrepo",
+    )
+    git(repo, "commit", "-qm", "add gitlink")
+    (repo / "vendor" / "subrepo").mkdir(parents=True)
+    result = assess_repo(repo)
+    assert result["repo_digest"]
+
+
+def test_assess_repo_snapshots_symlink_targets_without_following(tmp_path: Path):
+    # intent: a tracked symlink (mode 120000) whose target lies outside the
+    # repository aborted assess with ASSESSMENT_SOURCE_ESCAPE because the
+    # snapshot resolved (followed) it. Git stores the target path text as the
+    # blob; the snapshot must hash exactly that and never follow the link
+    # (found on dayprotocol/day: contracts/xel-v2-ref -> /root/projects/XEL/…).
+    repo = bare_repo(tmp_path)
+    outside = tmp_path / "outside-target"
+    outside.mkdir()
+    (repo / "external-ref").symlink_to(outside)
+    git(repo, "add", "--", "external-ref")
+    git(repo, "commit", "-qm", "add external symlink")
+    result = assess_repo(repo)
+    assert result["repo_digest"]

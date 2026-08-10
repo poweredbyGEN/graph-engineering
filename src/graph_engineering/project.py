@@ -306,12 +306,31 @@ def assessment_source(repo: Path) -> Mapping[str, str]:
     records: list[Mapping[str, Any]] = []
     total_bytes = 0
     for relative in paths:
-        path = (repo / relative).resolve()
+        unresolved = repo / relative
+        if unresolved.is_symlink():
+            # Git stores a symlink (mode 120000) as a blob holding the target
+            # path text; snapshot exactly that and never follow the link.
+            payload = os.readlink(unresolved).encode("utf-8", errors="surrogateescape")
+            total_bytes += len(payload)
+            records.append(
+                {
+                    "path": relative,
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "tracked": relative in tracked,
+                }
+            )
+            continue
+        path = unresolved.resolve()
         if path != repo and not path.is_relative_to(repo):
             raise ProjectPolicyError(
                 "ASSESSMENT_SOURCE_ESCAPE",
                 f"source path escapes repository: {relative}",
             )
+        if path.is_dir():
+            # Gitlink (submodule) entries appear in `git ls-files` as tracked
+            # paths but are directories on disk; their content belongs to the
+            # sub-repository, not this snapshot.
+            continue
         try:
             payload = path.read_bytes()
         except OSError as exc:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import stat
@@ -109,6 +110,21 @@ def _source_identity(repo: Path) -> dict[str, str]:
                 f"source path {relative!r} escapes repository",
             )
         path = repo / relative
+        if path.is_symlink():
+            # Git stores a symlink (mode 120000) as a blob holding the target
+            # path text; snapshot exactly that and never follow the link.
+            # Following would either escape the repository (absolute/external
+            # targets abort assess) or double-count in-repo content.
+            payload = os.readlink(path).encode("utf-8", errors="surrogateescape")
+            total_bytes += len(payload)
+            records.append(
+                {
+                    "path": relative,
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "tracked": relative in tracked,
+                }
+            )
+            continue
         try:
             if not path.resolve().is_relative_to(repo.resolve()):
                 raise SessionUxError(
@@ -119,6 +135,12 @@ def _source_identity(repo: Path) -> dict[str, str]:
             raise SessionUxError(
                 "ASSESSMENT_SOURCE_READ", f"cannot resolve source path {relative!r}"
             ) from exc
+        if path.is_dir():
+            # Gitlink (submodule) entries appear in `git ls-files` as tracked
+            # paths but are directories on disk; their content belongs to the
+            # sub-repository, not this snapshot. Reading one as a file raises
+            # IsADirectoryError and aborted assess on any repo with submodules.
+            continue
         try:
             size = path.stat().st_size
             if size > MAX_SOURCE_FILE_BYTES:
