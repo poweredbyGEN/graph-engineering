@@ -16,14 +16,16 @@ import signal
 import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Literal
 
 import jsonschema
 
-from .config import OpenAICompatibleAdapter, Profile, SubprocessAdapter
+from .a2a import A2AError, A2ALimits, execute_a2a
+from .artifacts import canonical_json
+from .config import A2AAdapter, OpenAICompatibleAdapter, Profile, SubprocessAdapter
 
 SAFE_ENV = frozenset(
     {
@@ -36,6 +38,10 @@ SAFE_ENV = frozenset(
         "TERM",
         "TMPDIR",
         "USER",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
     }
 )
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$")
@@ -77,9 +83,25 @@ class AdapterRequest:
     allowed_root: Path
     node_id: str
     run_id: str
+    attempt: int | None = None
     result_schema: Mapping[str, Any] | None = None
     base_sha: str | None = None
     idempotency_key: str | None = None
+    changeset_schema: Mapping[str, Any] | None = None
+    state_path: Path | None = None
+    confine_writes: bool = False
+    confined_writable_roots: tuple[Path, ...] = ()
+    confined_writable_bindings: tuple[tuple[Path, Path], ...] = ()
+    confined_readonly_bindings: tuple[tuple[Path, Path], ...] = ()
+    confined_environment: tuple[tuple[str, str], ...] = ()
+    audit_write_attempts: bool = True
+    confined_max_file_bytes: int = 4 * 1024 * 1024
+    cancelled: Callable[[], bool] = field(
+        default=lambda: False, repr=False, compare=False
+    )
+    dispatch_guard: Callable[[], None] = field(
+        default=lambda: None, repr=False, compare=False
+    )
 
 
 @dataclass(frozen=True)
@@ -100,6 +122,11 @@ class ExecutionReceipt:
     base_sha: str | None
     result_sha: str | None
     idempotency_key_digest: str | None = None
+    transport: str = "subprocess"
+    remote_task_id_digest: str | None = None
+    agent_card_digest: str | None = None
+    capability_digest: str | None = None
+    protocol_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -108,6 +135,7 @@ class AdapterResult:
     text: str
     events: tuple[Mapping[str, Any], ...]
     receipt: ExecutionReceipt
+    changeset: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -124,6 +152,23 @@ class _ProcessOutput:
     exit_code: int
     failure_code: str | None = None
     failure_message: str | None = None
+
+
+_WRITE_TRACE_SYSCALLS = (
+    "execve,open,openat,openat2,creat,unlink,unlinkat,rename,renameat,renameat2,"
+    "mkdir,mkdirat,rmdir,link,linkat,symlink,symlinkat,truncate,ftruncate,"
+    "chmod,fchmod,fchmodat,chown,fchown,fchownat,lchown,utime,utimes,"
+    "utimensat,mknod,mknodat,setxattr,lsetxattr,fsetxattr,removexattr,"
+    "lremovexattr,fremovexattr"
+)
+_MUTATING_TRACE = re.compile(
+    r"\b(?:creat|unlink(?:at)?|rename(?:at2?)?|mkdir(?:at)?|rmdir|link(?:at)?|"
+    r"symlink(?:at)?|truncate|ftruncate|chmod|fchmod(?:at)?|chown|fchown(?:at)?|"
+    r"lchown|utime|utimes|utimensat|mknod(?:at)?|(?:l|f)?setxattr|"
+    r"(?:l|f)?removexattr)\("
+    r"|\bopen(?:at2?)?\([^\n]*(?:O_WRONLY|O_RDWR|O_CREAT|O_TRUNC|O_APPEND)"
+)
+_TRACE_QUOTED = re.compile(r'"([^"\\]*(?:\\.[^"\\]*)*)"')
 
 
 def _digest(value: bytes) -> str:
@@ -167,6 +212,235 @@ def _environment(
 ) -> dict[str, str]:
     names = SAFE_ENV | frozenset(adapter.env_allowlist)
     return {name: environ[name] for name in sorted(names) if name in environ}
+
+
+def _write_confined_argv(
+    argv: Sequence[str],
+    *,
+    cwd: Path,
+    allowed_root: Path,
+    writable_roots: Sequence[Path],
+    writable_bindings: Sequence[tuple[Path, Path]],
+    readonly_bindings: Sequence[tuple[Path, Path]],
+    audit_path: Path,
+    path: str,
+    audit_write_attempts: bool,
+    max_file_bytes: int,
+) -> list[str]:
+    """Wrap a smoke worker in a read-only mount namespace and syscall audit.
+
+    The worker can read the host and use the network, but only explicitly disposable
+    roots are writable. The requested repository stays read-only. The trace records
+    both successful and denied mutation attempts, including writes a worker catches
+    and suppresses. There is deliberately no unconfined fallback.
+    """
+
+    required_tools = ["bwrap", "prlimit"]
+    if audit_write_attempts:
+        required_tools.append("strace")
+    tools = {name: shutil.which(name, path=path) for name in required_tools}
+    if any(value is None for value in tools.values()):
+        raise AdapterError(
+            "CONFINEMENT_UNAVAILABLE",
+            "required local write-confinement helper is unavailable",
+        )
+    try:
+        root = allowed_root.resolve(strict=True)
+        writable = tuple(item.resolve(strict=True) for item in writable_roots)
+        writable_aliases = tuple(
+            (source.resolve(strict=True), target.resolve(strict=True))
+            for source, target in writable_bindings
+        )
+        readonly = tuple(
+            (source.resolve(strict=True), target.resolve(strict=True))
+            for source, target in readonly_bindings
+        )
+        audit = audit_path.resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise AdapterError(
+            "CONFINEMENT_UNAVAILABLE", "write-confinement root is invalid"
+        ) from exc
+    if any(
+        not any(source == item or source.is_relative_to(item) for item in writable)
+        or source.is_dir() != target.is_dir()
+        or target == root
+        or target.is_relative_to(root)
+        or root.is_relative_to(target)
+        or audit == target
+        or audit.is_relative_to(target)
+        for source, target in writable_aliases
+    ) or (
+        not audit.parent.is_dir()
+        or audit.is_relative_to(root)
+        or not cwd.is_relative_to(root)
+        or any(item == root or root.is_relative_to(item) for item in writable)
+        or any(audit.is_relative_to(item) for item in writable)
+    ):
+        raise AdapterError(
+            "CONFINEMENT_UNAVAILABLE", "write-confinement boundary is invalid"
+        )
+    command = [
+        tools["prlimit"],
+        f"--fsize={max_file_bytes}:{max_file_bytes}",
+        "--",
+    ]
+    if audit_write_attempts:
+        command.extend(
+            (
+                tools["strace"],
+                "-f",
+                "-qq",
+                "-yy",
+                "-e",
+                f"trace={_WRITE_TRACE_SYSCALLS}",
+                "-o",
+                str(audit),
+                "--",
+            )
+        )
+    command.extend(
+        (
+            tools["bwrap"],
+            "--unshare-all",
+            "--unshare-user",
+            "--share-net",
+            "--die-with-parent",
+            "--disable-userns",
+            "--ro-bind",
+            "/",
+            "/",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--chdir",
+            str(cwd),
+        )
+    )
+    for item in writable:
+        command.extend(("--bind", str(item), str(item)))
+    for source, target in writable_aliases:
+        command.extend(("--bind", str(source), str(target)))
+    for source, target in readonly:
+        command.extend(("--ro-bind", str(source), str(target)))
+    command.extend(("--", *argv))
+    return command
+
+
+def _write_attempted(
+    audit_path: Path,
+    *,
+    writable_roots: Sequence[Path],
+    writable_aliases: Sequence[Path] = (),
+) -> bool:
+    try:
+        trace = audit_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    allowed_paths = tuple(
+        root.resolve(strict=True) for root in (*writable_roots, *writable_aliases)
+    )
+    allowed = tuple(str(root) for root in allowed_paths)
+    successful_execs = 0
+    worker_started = False
+    for line in trace.splitlines():
+        if " execve(" in line and line.rstrip().endswith("= 0"):
+            successful_execs += 1
+            worker_started = successful_execs >= 2
+            continue
+        if not worker_started:
+            continue
+        if not _MUTATING_TRACE.search(line):
+            continue
+        # Disposable HOME/XDG/tool state is intentionally writable. With strace
+        # ``-yy``, fd-relative mutations also carry their resolved backing path.
+        quoted = _TRACE_QUOTED.findall(line)
+        parent_escape = any(".." in Path(item).parts for item in quoted)
+        # Multi-path mutations must classify every filesystem operand.  An
+        # allowed source must never sanitize a forbidden destination (for
+        # example rename(disposable, repo) or link(disposable, host)).
+        multi_path = re.search(
+            r"\b(rename(?:at2?)?|link(?:at)?|symlink(?:at)?)\(", line
+        )
+        if multi_path:
+            syscall = multi_path.group(1)
+            path_indexes = {
+                "rename": (0, 1),
+                "renameat": (0, 1),
+                "renameat2": (0, 1),
+                "link": (0, 1),
+                "linkat": (0, 1),
+                "symlink": (0, 1),
+                "symlinkat": (0, 1),
+            }[syscall]
+            operands = [quoted[index] for index in path_indexes if index < len(quoted)]
+            if syscall.startswith("symlink") and _confined_relative_symlink(
+                line, allowed_paths
+            ):
+                continue
+            if len(operands) < 2 or any(
+                not _trace_operand_is_allowed(item, allowed_paths) for item in operands
+            ):
+                return True
+        # Device handles are process plumbing for single-path mutations.  This
+        # exemption comes after multi-path classification so a /proc or /dev
+        # source cannot hide a forbidden rename/link destination.
+        if any(prefix in line for prefix in ("/dev/", "/proc/", "/sys/")):
+            continue
+        in_disposable = any(
+            f'"{root}"' in line or f'"{root}/' in line or f"<{root}/" in line
+            for root in allowed
+        )
+        if in_disposable and (
+            not parent_escape or _confined_relative_symlink(line, allowed_paths)
+        ):
+            continue
+        return True
+    return False
+
+
+def _trace_operand_is_allowed(value: str, allowed_roots: Sequence[Path]) -> bool:
+    """Return whether one absolute trace operand stays in disposable state."""
+
+    path = Path(value)
+    if not path.is_absolute() or ".." in path.parts:
+        return False
+    try:
+        resolved = path.resolve(strict=False)
+    except (OSError, RuntimeError):
+        return False
+    return any(
+        resolved == root or resolved.is_relative_to(root) for root in allowed_roots
+    )
+
+
+def _confined_relative_symlink(line: str, allowed_roots: Sequence[Path]) -> bool:
+    """Accept a lexical parent only when a symlink still resolves inside its root."""
+
+    if not re.search(r"\bsymlink\(", line):
+        return False
+    quoted = _TRACE_QUOTED.findall(line)
+    if len(quoted) != 2:
+        return False
+    target = Path(quoted[0])
+    link = Path(quoted[1])
+    if not link.is_absolute():
+        return False
+    owner = next(
+        (root for root in allowed_roots if link == root or link.is_relative_to(root)),
+        None,
+    )
+    if owner is None:
+        return False
+    try:
+        resolved = (
+            target.resolve(strict=False)
+            if target.is_absolute()
+            else (link.parent / target).resolve(strict=False)
+        )
+    except (OSError, RuntimeError):
+        return False
+    return resolved == owner or resolved.is_relative_to(owner)
 
 
 def _format_argv(template: Sequence[str], values: Mapping[str, str]) -> list[str]:
@@ -481,6 +755,25 @@ def probe_profile(
             )
         )
         return tuple(probes)
+    if isinstance(profile.adapter, A2AAdapter):
+        missing = not source.get(profile.adapter.auth_env)
+        probes.append(
+            DoctorProbe(
+                "a2a-auth",
+                not missing,
+                "configured" if not missing else "required reference missing (1)",
+            )
+        )
+        probes.append(
+            DoctorProbe(
+                "a2a-profile",
+                bool(
+                    profile.adapter.allowed_skills and profile.adapter.expected_identity
+                ),
+                "bounded private Agent Card profile",
+            )
+        )
+        return tuple(probes)
     path = source.get("PATH", os.defpath)
     executable = shutil.which(profile.adapter.argv[0], path=path)
     probes.append(
@@ -497,7 +790,9 @@ def probe_profile(
         DoctorProbe(
             "environment",
             not missing_env,
-            "complete" if not missing_env else f"missing {missing_env}",
+            "complete"
+            if not missing_env
+            else f"required references missing ({len(missing_env)})",
         )
     )
     return tuple(probes)
@@ -519,13 +814,11 @@ def execute_profile(
             "UNSUPPORTED_ADAPTER",
             "openai-compatible execution is not implemented; use a subprocess harness",
         )
-    adapter = profile.adapter
     source = os.environ if environ is None else environ
     for label, identifier in (("run_id", request.run_id), ("node_id", request.node_id)):
         if not _IDENTIFIER.fullmatch(identifier):
             raise AdapterError("INVALID_IDENTIFIER", f"{label} is not portable")
     cwd, _ = _bounded_cwd(request.cwd, request.allowed_root)
-    scratch = _scratch_root(source)
     active_limits = limits or ExecutionLimits()
     schema_json: str | None = None
     if request.result_schema is not None:
@@ -536,9 +829,145 @@ def execute_profile(
             schema_json = json.dumps(request.result_schema, sort_keys=True)
         except (jsonschema.SchemaError, TypeError, ValueError) as exc:
             raise AdapterError("INVALID_RESULT_SCHEMA", str(exc)) from exc
+    if request.changeset_schema is not None:
+        try:
+            jsonschema.validators.validator_for(request.changeset_schema).check_schema(
+                request.changeset_schema
+            )
+        except (jsonschema.SchemaError, TypeError, ValueError) as exc:
+            raise AdapterError("INVALID_CHANGESET_SCHEMA", str(exc)) from exc
     base_sha = base_sha_hook() if base_sha_hook is not None else request.base_sha
     started_wall = time.time()
     started_monotonic = time.monotonic()
+
+    if request.confine_writes and not isinstance(profile.adapter, SubprocessAdapter):
+        raise AdapterError(
+            "CONFINEMENT_UNAVAILABLE",
+            "local write confinement is unavailable for this adapter",
+        )
+
+    if isinstance(profile.adapter, A2AAdapter):
+        if request.state_path is None:
+            raise AdapterError(
+                "A2A_STATE_REQUIRED", "A2A execution requires durable state"
+            )
+        auth = source.get(profile.adapter.auth_env, "")
+        # This is deliberately the last local action before the remote request.
+        # Preflight performed while constructing the scheduler is not enough: a
+        # reviewed project/private policy may drift while a node waits in the
+        # ready queue.
+        request.dispatch_guard()
+        try:
+            outcome = execute_a2a(
+                profile,
+                prompt=request.prompt,
+                run_id=request.run_id,
+                node_id=request.node_id,
+                attempt=request.attempt,
+                state_path=str(request.state_path),
+                idempotency_key=request.idempotency_key,
+                auth=auth,
+                limits=A2ALimits(
+                    timeout_seconds=active_limits.timeout_seconds,
+                    max_body_bytes=active_limits.max_stdout_bytes,
+                ),
+                cancelled=request.cancelled,
+                writer=request.changeset_schema is not None,
+            )
+        except A2AError as exc:
+            duration_ms = round((time.monotonic() - started_monotonic) * 1000)
+            receipt = ExecutionReceipt(
+                run_id=request.run_id,
+                node_id=request.node_id,
+                profile=profile.name,
+                model=profile.model,
+                command_digest=_digest(
+                    canonical_json(
+                        {
+                            "adapter": "a2a",
+                            "identity": profile.adapter.expected_identity,
+                            "skills": profile.adapter.allowed_skills,
+                        }
+                    )
+                ),
+                result_schema_digest=(
+                    _digest(schema_json.encode("utf-8")) if schema_json else None
+                ),
+                started_at_unix=started_wall,
+                duration_ms=duration_ms,
+                exit_code=1,
+                stdout_digest=_digest(b""),
+                stderr_digest=_digest(b""),
+                stdout_bytes=0,
+                stderr_bytes=0,
+                base_sha=base_sha,
+                result_sha=None,
+                idempotency_key_digest=(
+                    _digest(request.idempotency_key.encode("utf-8"))
+                    if request.idempotency_key is not None
+                    else None
+                ),
+                transport="a2a",
+            )
+            raise AdapterError(exc.code, exc.message, receipt) from None
+        duration_ms = round((time.monotonic() - started_monotonic) * 1000)
+        receipt = ExecutionReceipt(
+            run_id=request.run_id,
+            node_id=request.node_id,
+            profile=profile.name,
+            model=profile.model,
+            command_digest=_digest(
+                canonical_json(
+                    {
+                        "adapter": "a2a",
+                        "identity": profile.adapter.expected_identity,
+                        "skills": profile.adapter.allowed_skills,
+                    }
+                )
+            ),
+            result_schema_digest=(
+                _digest(schema_json.encode("utf-8")) if schema_json else None
+            ),
+            started_at_unix=started_wall,
+            duration_ms=duration_ms,
+            exit_code=0,
+            stdout_digest=outcome.response_digest,
+            stderr_digest=_digest(b""),
+            stdout_bytes=outcome.response_bytes,
+            stderr_bytes=0,
+            base_sha=base_sha,
+            result_sha=result_sha_hook() if result_sha_hook is not None else None,
+            idempotency_key_digest=(
+                _digest(request.idempotency_key.encode("utf-8"))
+                if request.idempotency_key is not None
+                else None
+            ),
+            transport="a2a",
+            remote_task_id_digest=(
+                _digest(outcome.task_id.encode("utf-8")) if outcome.task_id else None
+            ),
+            agent_card_digest=outcome.card_digest,
+            capability_digest=outcome.capability_digest,
+            protocol_version=outcome.protocol_version,
+        )
+        try:
+            if request.result_schema is not None:
+                jsonschema.validate(outcome.value, request.result_schema)
+            if request.changeset_schema is not None:
+                jsonschema.validate(outcome.changeset, request.changeset_schema)
+        except jsonschema.ValidationError:
+            raise AdapterError(
+                "SCHEMA_MISMATCH",
+                "remote artifact did not match its requested schema",
+                receipt,
+            ) from None
+        events = tuple(
+            {"type": "a2a.task-status", "state": state} for state in outcome.statuses
+        )
+        return AdapterResult(outcome.value, "", events, receipt, outcome.changeset)
+
+    adapter = profile.adapter
+    scratch = _scratch_root(source)
 
     with TemporaryDirectory(prefix="graph-engineering-", dir=scratch) as temp_dir:
         temp = Path(temp_dir)
@@ -562,18 +991,70 @@ def execute_profile(
             "schema_file": str(schema_file),
         }
         argv = _format_argv(adapter.argv, values)
+        audit_path = temp / "write-audit.log"
+        if request.confine_writes:
+            if request.confined_max_file_bytes <= 0:
+                raise AdapterError(
+                    "CONFINEMENT_UNAVAILABLE",
+                    "confined file-size limit must be positive",
+                )
+            argv = _write_confined_argv(
+                argv,
+                cwd=cwd,
+                allowed_root=request.allowed_root,
+                writable_roots=request.confined_writable_roots,
+                writable_bindings=request.confined_writable_bindings,
+                readonly_bindings=request.confined_readonly_bindings,
+                audit_path=audit_path,
+                path=source.get("PATH", os.defpath),
+                audit_write_attempts=request.audit_write_attempts,
+                max_file_bytes=request.confined_max_file_bytes,
+            )
         stdin = (
             request.prompt.encode("utf-8")
             if adapter.prompt_transport == "stdin"
             else None
         )
+        # Fence the actual process boundary, after all local request setup but
+        # immediately before the worker can observe or mutate anything.
+        request.dispatch_guard()
+        process_env = _environment(adapter, source)
+        if request.confine_writes:
+            if any(name not in SAFE_ENV for name, _ in request.confined_environment):
+                raise AdapterError(
+                    "CONFINEMENT_UNAVAILABLE",
+                    "confined environment contains an unsupported variable",
+                )
+            process_env.update(request.confined_environment)
+            if request.audit_write_attempts:
+                process_env["GRAPH_ENGINEERING_WRITE_AUDIT"] = str(audit_path)
         completed = _run_process(
             argv,
             cwd=cwd,
-            env=_environment(adapter, source),
+            env=process_env,
             stdin=stdin,
             limits=active_limits,
         )
+        if (
+            request.confine_writes
+            and request.audit_write_attempts
+            and _write_attempted(
+                audit_path,
+                writable_roots=request.confined_writable_roots,
+                writable_aliases=tuple(
+                    target for _, target in request.confined_writable_bindings
+                ),
+            )
+        ):
+            completed = _ProcessOutput(
+                completed.stdout,
+                completed.stderr,
+                completed.exit_code,
+                "WRITE_DETECTED",
+                "worker attempted a filesystem mutation",
+            )
+        if request.confine_writes:
+            audit_path.unlink(missing_ok=True)
 
     duration_ms = round((time.monotonic() - started_monotonic) * 1000)
     schema_digest = _digest(schema_json.encode("utf-8")) if schema_json else None

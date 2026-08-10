@@ -5,6 +5,7 @@ steps:
   runtime:
     image: ghcr.io/astral-sh/uv:python3.13-bookworm
     commands:
+      - apt-get update && apt-get install -y --no-install-recommends bubblewrap strace util-linux
       - uv run --frozen --extra dev pytest -q tests
       - uv build
 

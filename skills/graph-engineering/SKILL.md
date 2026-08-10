@@ -1,9 +1,7 @@
 ---
 name: graph-engineering
-description: Plan and execute substantial software work as an evidence-gated dependency graph with parallel subagents, isolated writes, deterministic tests, localized retries, independent review, and an explicit integration node. Use when the user asks for graph-style development, a workflow, parallel agents, a migration or audit across many files, or a feature with at least three independent work lanes or real ordering constraints. Skip graph overhead for small tasks whose steps are genuinely sequential.
+description: Plan and execute substantial software work as an evidence-gated dependency graph with parallel subagents, isolated writes, deterministic tests, quorum joins, localized retries, independent review, remote A2A workers, and an explicit integration node. Use when the user asks for graph-style development, a workflow, parallel agents, mixed local or remote workers, verifier consensus, a migration or audit across many files, or a feature with at least three independent work lanes or real ordering constraints. Skip graph overhead for small tasks whose steps are genuinely sequential.
 ---
-
-<!-- shared: true -->
 
 # Graph Engineering
 
@@ -23,6 +21,25 @@ Use graph execution when at least two of these are true:
 
 For a small edit or a true chain, state that graph overhead will not help and execute normally.
 Never manufacture parallelism by giving multiple agents the same target.
+
+For an existing or new repository, begin with the read-only adoption audit:
+
+```bash
+graph-engineer assess --repo "$PWD" --json
+```
+
+If graph execution pays, run `graph-engineer init --repo "$PWD" --json`. This discovers reviewed
+workflows and matching durable runs, or scaffolds the minimal public project boundary when none
+exists. Inspect and complete any scaffolded product contract, checks, write roots, and deployment
+metadata; configure private profiles outside the repository; then rerun `init`. To consume a saved
+assessment, pass `--from-assessment <path>`—the CLI rejects it if HEAD or tracked/untracked source
+changed. Resume a matching active run instead of creating a duplicate. Assessment and init never
+infer secrets, approvals, MCP/A2A transport, deployment targets, or permission to perform effects.
+
+Before any dependency audit or worker fan-out, read
+[references/planning.md](references/planning.md). Discover the repository capsule, ask only its
+missing product questions, and require a named human to approve the frozen generation. `init` must
+report no planning questions and no brief/decision/contract drift before graph construction begins.
 
 ## 2. Establish the authority and scope
 
@@ -72,6 +89,15 @@ ranking, quorum, or integration. Count `received` versus `expected` at every fan
 items. For large fan-ins, consolidate in bounded layers without discarding file paths, errors, or
 evidence.
 
+Declare join semantics in the consumer contract, never in its prompt. Use `any`, `n_of_m`, or
+`majority` only over optional independent producers; their failures are settlements, not global run
+failures. These policies count successful node settlements, not `true` values inside model output.
+For semantic voting, collect typed verdicts and reduce them with deterministic code. Use
+`all_settled` when the consumer needs every optional terminal outcome, and `all` when every
+dependency must pass. Persist the exact decision snapshot that released or blocked the consumer.
+Quorum is useful for availability and bounded evidence collection; it does not turn model agreement
+into deterministic code correctness.
+
 Prioritize the neck: ready nodes that unlock the most downstream work. Cap concurrency by actual
 independent targets, agent capacity, rate limits, and workspace safety—not an aspirational number.
 Follow the fleet-supervision procedure in
@@ -90,6 +116,11 @@ artifacts, and reap completed processes. Fan-out is not fire-and-forget.
   and fresh-context adjudication on the strongest justified tier.
 - Record failures as structured results. One optional branch failure must not discard independent
   successes.
+
+Prefer local subprocess profiles for locally controlled CLIs. Use MCP for bounded tools, data, or
+durable task capabilities. Use A2A only to delegate one typed node to an independently operated
+remote agent; the graph runtime remains the scheduler and local checks remain the acceptance
+authority. Read [references/extending.md](references/extending.md) before adding either boundary.
 
 Exactly one orchestrator owns integration, merge, deploy, or other shared single-writer surfaces.
 Workers never self-integrate or self-deploy.
@@ -136,6 +167,7 @@ Report:
 - exact deterministic commands and their results;
 - verifier findings and integration outcome;
 - wall time, useful overlap, token/cost data when available;
+- the versioned lifecycle trace and exact join settlement that released each quorum consumer;
 - remaining blockers or unverified assumptions.
 
 Say whether the result is implemented, integrated, merged, deployed, and verified live. These are
@@ -143,6 +175,8 @@ different states. Never call a plan, agent message, green lane, or open pull req
 
 ## Reference routing
 
+- Read [references/planning.md](references/planning.md) before planning a feature, changing a frozen
+  outcome, drawing dependencies, or dispatching workers.
 - Read [references/runtime-guide.md](references/runtime-guide.md) for installation, private worker
   profiles, starting a workflow, status/resume, MCP registration, and troubleshooting.
 - Read [references/workflow-contract.md](references/workflow-contract.md) before authoring workflow

@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,29 @@ DEFAULT_MAX_FILES = 25_000
 DEFAULT_MAX_BLOBS = 100_000
 DEFAULT_MAX_BYTES = 512 * 1024 * 1024
 DEFAULT_MAX_ITEM_BYTES = 16 * 1024 * 1024
+DEFAULT_MAX_COMMITS = 2_048
+DEFAULT_MAX_COMMIT_BYTES = 256 * 1024
+DEFAULT_MAX_COMMIT_MESSAGE_BYTES = 64 * 1024
+DEFAULT_MAX_IDENTITY_NAME_BYTES = 128
+DEFAULT_MAX_IDENTITY_EMAIL_BYTES = 254
+TRUSTED_COMMIT_BASE_ENV = "GRAPH_ENGINEERING_TRUSTED_COMMIT_BASE"
+
+# These are public project/service identities, not people. Operators may add an exact
+# project-approved generic identity at the CLI boundary; no personal identity is inferred.
+DEFAULT_ALLOWED_COMMIT_NAMES = frozenset(
+    {"poweredbyGEN", "Graph Engineering", "github-actions[bot]", "dependabot[bot]"}
+)
+_GITHUB_NOREPLY_EMAIL = re.compile(
+    r"(?i)^[a-z0-9][a-z0-9._+-]*@users\.noreply\.github\.com$"
+)
+_MESSAGE_EMAIL = re.compile(
+    r"(?i)(?<![a-z0-9._+-])([a-z0-9][a-z0-9._+-]*@[a-z0-9.-]+\.[a-z]{2,})(?![a-z0-9.-])"
+)
+_IDENTITY_TRAILER = re.compile(
+    r"(?im)^(?:co-authored-by|signed-off-by|reviewed-by|tested-by|reported-by|helped-by):"
+    r"\s*(.+?)\s*<([^<>]+)>\s*$"
+)
+_ZERO_SHA = re.compile(r"^0+$")
 
 
 class ScanError(RuntimeError):
@@ -108,6 +132,48 @@ def _git(repo: Path, args: Sequence[str], *, input_bytes: bytes | None = None) -
     except (OSError, subprocess.SubprocessError) as exc:
         raise ScanError(f"git command failed: {' '.join(args[:2])}") from exc
     return completed.stdout
+
+
+def _resolve_commit(repo: Path, revision: str) -> str:
+    if not revision or "\x00" in revision or "\n" in revision or "\r" in revision:
+        raise ScanError("candidate revision is invalid")
+    output = _git(
+        repo,
+        ["rev-parse", "--verify", "--end-of-options", f"{revision}^{{commit}}"],
+    ).strip()
+    try:
+        return output.decode("ascii", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ScanError("candidate revision did not resolve to an object ID") from exc
+
+
+def resolve_trusted_candidate_base(repo: Path, explicit: str | None = None) -> str:
+    """Resolve a reviewed base without treating all legacy history as a candidate.
+
+    An explicit argument wins, followed by the dedicated release environment variable,
+    Woodpecker's pull-request target, and Woodpecker's pre-push SHA. Outside CI a feature
+    checkout may use ``origin/main`` only when it differs from ``HEAD``. A merged checkout
+    must name its prior reviewed base explicitly, which prevents an empty range from
+    masquerading as release evidence.
+    """
+
+    if explicit:
+        return explicit
+    if configured := os.environ.get(TRUSTED_COMMIT_BASE_ENV):
+        return configured
+    if target := os.environ.get("CI_COMMIT_TARGET_BRANCH"):
+        return f"origin/{target}"
+    before = os.environ.get("CI_COMMIT_BEFORE_SHA", "")
+    if before and not _ZERO_SHA.fullmatch(before):
+        return before
+    try:
+        main = _resolve_commit(repo, "origin/main")
+        head = _resolve_commit(repo, "HEAD")
+    except ScanError as exc:
+        raise ScanError("trusted candidate base is required") from exc
+    if main != head:
+        return "origin/main"
+    raise ScanError("trusted candidate base is required")
 
 
 def load_extra_rules(path: Path | None = None) -> tuple[PatternRule, ...]:
@@ -278,6 +344,183 @@ def scan_history(
     return sorted(set(findings))
 
 
+def _has_disallowed_control(text: str, *, allow_layout: bool = False) -> bool:
+    allowed = {"\n", "\t"} if allow_layout else set()
+    return any(
+        character not in allowed
+        and unicodedata.category(character) in {"Cc", "Cf", "Cs"}
+        for character in text
+    )
+
+
+def _parse_commit_identity(line: bytes, header: bytes) -> tuple[str, str] | None:
+    if not line.startswith(header + b" "):
+        return None
+    value = line[len(header) + 1 :]
+    match = re.fullmatch(rb"(.+) <([^<>]+)> [0-9]+ [+-][0-9]{4}", value)
+    if match is None:
+        raise ScanError("candidate commit identity is malformed")
+    try:
+        name = match.group(1).decode("utf-8", errors="strict")
+        email = match.group(2).decode("ascii", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ScanError("candidate commit identity encoding is invalid") from exc
+    return name, email
+
+
+def _commit_metadata_rules(
+    content: bytes,
+    *,
+    allowed_names: frozenset[str],
+    allowed_emails: frozenset[str],
+    rules: Sequence[PatternRule],
+    max_commit_bytes: int,
+    max_message_bytes: int,
+) -> set[str]:
+    if len(content) > max_commit_bytes:
+        return {"commit-size-policy"}
+    headers, separator, message_bytes = content.partition(b"\n\n")
+    if not separator:
+        return {"commit-format-policy"}
+    if len(message_bytes) > max_message_bytes:
+        return {"commit-message-size-policy"}
+    try:
+        message = message_bytes.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return {"commit-message-encoding-policy"}
+
+    identities: dict[bytes, tuple[str, str]] = {}
+    for header in (b"author", b"committer"):
+        matches = [
+            identity
+            for line in headers.splitlines()
+            if (identity := _parse_commit_identity(line, header)) is not None
+        ]
+        if len(matches) != 1:
+            return {"commit-format-policy"}
+        identities[header] = matches[0]
+
+    found: set[str] = set()
+    for name, email in identities.values():
+        if len(name.encode("utf-8")) > DEFAULT_MAX_IDENTITY_NAME_BYTES:
+            found.add("commit-identity-size-policy")
+        if len(email.encode("ascii")) > DEFAULT_MAX_IDENTITY_EMAIL_BYTES:
+            found.add("commit-identity-size-policy")
+        if _has_disallowed_control(name) or _has_disallowed_control(email):
+            found.add("commit-control-policy")
+        if name not in allowed_names:
+            found.add("commit-name-policy")
+        normalized_email = email.casefold()
+        if (
+            normalized_email not in allowed_emails
+            and not _GITHUB_NOREPLY_EMAIL.fullmatch(email)
+        ):
+            found.add("commit-email-policy")
+    if _has_disallowed_control(message, allow_layout=True):
+        found.add("commit-control-policy")
+    for message_email in _MESSAGE_EMAIL.findall(message):
+        normalized = message_email.casefold()
+        if normalized not in allowed_emails and not _GITHUB_NOREPLY_EMAIL.fullmatch(
+            message_email
+        ):
+            found.add("commit-email-policy")
+    for trailer in _IDENTITY_TRAILER.finditer(message):
+        if trailer.group(1) not in allowed_names:
+            found.add("commit-name-policy")
+
+    combined = "\n".join(
+        [
+            *(part for identity in identities.values() for part in identity),
+            message,
+        ]
+    ).encode("utf-8")
+    if _scan_content(
+        combined,
+        source="commit",
+        location="redacted",
+        rules=(*_BUILTIN_RULES, *rules),
+    ):
+        found.add("commit-sensitive-pattern-policy")
+    return found
+
+
+def scan_candidate_commit_metadata(
+    repo: Path,
+    *,
+    trusted_base: str,
+    candidate: str = "HEAD",
+    allowed_names: Sequence[str] = (),
+    allowed_emails: Sequence[str] = (),
+    rules: Sequence[PatternRule] = (),
+    max_commits: int = DEFAULT_MAX_COMMITS,
+    max_commit_bytes: int = DEFAULT_MAX_COMMIT_BYTES,
+    max_message_bytes: int = DEFAULT_MAX_COMMIT_MESSAGE_BYTES,
+) -> list[Finding]:
+    """Scan only commits introduced after an explicit reviewed base.
+
+    Findings deliberately expose only a short object ID and stable rule ID. The base
+    must be an ancestor of the candidate so a misleading range cannot hide commits.
+    """
+
+    repo = repo.resolve()
+    base_oid = _resolve_commit(repo, trusted_base)
+    candidate_oid = _resolve_commit(repo, candidate)
+    try:
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "merge-base",
+                "--is-ancestor",
+                base_oid,
+                candidate_oid,
+            ],
+            capture_output=True,
+            check=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ScanError("trusted candidate base is not an ancestor") from exc
+    records = _git(repo, ["rev-list", "--reverse", f"{base_oid}..{candidate_oid}"])
+    commit_ids = records.decode("ascii", errors="strict").splitlines()
+    if len(commit_ids) > max_commits:
+        raise ScanError("candidate range exceeds commit-count limit")
+
+    approved_names = frozenset({*DEFAULT_ALLOWED_COMMIT_NAMES, *allowed_names})
+    approved_emails = frozenset(email.casefold() for email in allowed_emails)
+    if any(
+        not value or _has_disallowed_control(value)
+        for value in (*approved_names, *approved_emails)
+    ):
+        raise ScanError("commit identity policy is invalid")
+
+    findings: list[Finding] = []
+    for oid in commit_ids:
+        size_bytes = _git(repo, ["cat-file", "-s", oid]).strip()
+        try:
+            size = int(size_bytes)
+        except ValueError as exc:
+            raise ScanError("candidate commit size is invalid") from exc
+        short_oid = oid[:12]
+        if size > max_commit_bytes:
+            findings.append(Finding("commit", short_oid, "commit-size-policy"))
+            continue
+        content = _git(repo, ["cat-file", "commit", oid])
+        for rule in sorted(
+            _commit_metadata_rules(
+                content,
+                allowed_names=approved_names,
+                allowed_emails=approved_emails,
+                rules=rules,
+                max_commit_bytes=max_commit_bytes,
+                max_message_bytes=max_message_bytes,
+            )
+        ):
+            findings.append(Finding("commit", short_oid, rule))
+    return sorted(set(findings))
+
+
 def scan_repository(
     repo: Path, *, deny_pattern_file: Path | None = None
 ) -> list[Finding]:
@@ -294,8 +537,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         description="Scan a public repository without printing matched content"
     )
     parser.add_argument("--repo", type=Path, default=Path.cwd())
-    parser.add_argument("--mode", choices=("all", "tree", "history"), default="all")
+    parser.add_argument(
+        "--mode",
+        choices=("all", "tree", "history", "candidate-metadata"),
+        default="all",
+    )
     parser.add_argument("--deny-pattern-file", type=Path)
+    parser.add_argument("--candidate-base")
+    parser.add_argument("--candidate", default="HEAD")
+    parser.add_argument("--allowed-commit-name", action="append", default=[])
+    parser.add_argument("--allowed-commit-email", action="append", default=[])
     args = parser.parse_args(argv)
     try:
         rules = load_extra_rules(args.deny_pattern_file)
@@ -304,6 +555,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             findings = scan_worktree(args.repo, rules=rules)
         elif args.mode == "history":
             findings = scan_history(args.repo, rules=rules)
+        elif args.mode == "candidate-metadata":
+            base = resolve_trusted_candidate_base(args.repo, args.candidate_base)
+            findings = scan_candidate_commit_metadata(
+                args.repo,
+                trusted_base=base,
+                candidate=args.candidate,
+                allowed_names=args.allowed_commit_name,
+                allowed_emails=args.allowed_commit_email,
+                rules=rules,
+            )
         else:
             findings = (
                 *scan_worktree(args.repo, rules=rules),

@@ -16,6 +16,7 @@ from graph_engineering.adapters import (
     AdapterError,
     AdapterRequest,
     ExecutionLimits,
+    _write_attempted,
     execute_profile,
     normalize_output,
     probe_profile,
@@ -428,6 +429,22 @@ def test_jsonl_uses_last_completed_agent_message():
     assert value == {"answer": "final"}
 
 
+def test_jsonl_never_promotes_codex_error_items_to_a_result():
+    # intent: a zero-exit Codex error stream is not an authoritative final answer.
+    events = [
+        {"type": "thread.started", "thread_id": "opaque"},
+        {
+            "type": "item.completed",
+            "item": {"type": "error", "message": '{"answer":"spoofed"}'},
+        },
+        {"type": "turn.started"},
+    ]
+    raw = ("\n".join(json.dumps(event) for event in events) + "\n").encode()
+    with pytest.raises(AdapterError) as caught:
+        normalize_output(raw, output_format="jsonl")
+    assert caught.value.code == "MALFORMED_OUTPUT"
+
+
 def test_jsonl_parses_entire_stream_before_accepting_structured_result():
     # intent: a plausible early result cannot hide a malformed trailing event.
     raw = b'{"type":"result","structured_output":{"answer":"early"}}\nnot-json\n'
@@ -537,3 +554,39 @@ def test_invalid_result_schema_fails_before_worker_is_spawned(tmp_path: Path):
         execute_profile(profile(script), bad_request, environ=environment(tmp_path))
     assert caught.value.code == "INVALID_RESULT_SCHEMA"
     assert not touched.exists()
+
+
+@pytest.mark.parametrize("syscall", ["rename", "link"])
+def test_write_audit_rejects_allowed_source_with_forbidden_destination(
+    tmp_path: Path, syscall: str
+):
+    # intent: one disposable operand cannot hide an attempted write outside it.
+    disposable = tmp_path / "state"
+    disposable.mkdir()
+    audit = tmp_path / "audit.log"
+    audit.write_text(
+        '1 execve("/usr/bin/worker", ["worker"], 0x0) = 0\n'
+        '1 execve("/usr/bin/worker", ["worker"], 0x0) = 0\n'
+        f'1 {syscall}("{disposable}/source", "/workspace/repo/escape") = -1 EROFS\n',
+        encoding="utf-8",
+    )
+
+    assert _write_attempted(audit, writable_roots=(disposable,))
+
+
+def test_write_audit_rejects_proc_source_with_forbidden_linkat_destination(
+    tmp_path: Path,
+):
+    # intent: process-plumbing exemptions never sanitize another path operand.
+    disposable = tmp_path / "state"
+    disposable.mkdir()
+    audit = tmp_path / "audit.log"
+    audit.write_text(
+        '1 execve("/usr/bin/worker", ["worker"], 0x0) = 0\n'
+        '1 execve("/usr/bin/worker", ["worker"], 0x0) = 0\n'
+        '1 linkat(AT_FDCWD, "/proc/self/fd/3", AT_FDCWD, '
+        '"/workspace/repo/escape", 0) = -1 EROFS\n',
+        encoding="utf-8",
+    )
+
+    assert _write_attempted(audit, writable_roots=(disposable,))

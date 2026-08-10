@@ -9,6 +9,7 @@ gate passes, and the built archives survive an isolated installation smoke test.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -34,6 +35,9 @@ CHANGELOG_HEADING = re.compile(
     r"^## \[([^]]+)] - ([0-9]{4}-[0-9]{2}-[0-9]{2})$", re.MULTILINE
 )
 SOURCE_VERSION = re.compile(r'^__version__ = "([^"]+)"$', re.MULTILINE)
+REQUIRED_CAPABILITY_COMMANDS = frozenset(
+    {"capabilities", "doctor", "plan", "run", "status", "trace", "validate"}
+)
 
 
 class GateError(RuntimeError):
@@ -173,7 +177,29 @@ def refresh_release_tag(root: Path = ROOT) -> str:
     return expected
 
 
-def _gate_commands() -> tuple[tuple[tuple[str, ...], Mapping[str, str]], ...]:
+def _candidate_metadata_command(candidate_base: str | None) -> tuple[str, ...]:
+    command = (
+        "uv",
+        "run",
+        "--frozen",
+        "--extra",
+        "dev",
+        "python",
+        "-m",
+        "graph_engineering.public_safety",
+        "--repo",
+        ".",
+        "--mode",
+        "candidate-metadata",
+    )
+    if candidate_base is not None:
+        return (*command, "--candidate-base", candidate_base)
+    return command
+
+
+def _gate_commands(
+    candidate_base: str | None = None,
+) -> tuple[tuple[tuple[str, ...], Mapping[str, str]], ...]:
     base = ("uv", "run", "--frozen", "--extra", "dev")
     inherited = os.environ.copy()
     traces = inherited | {"GRAPH_ENGINEERING_PORTABLE_TESTS": "1"}
@@ -217,15 +243,16 @@ def _gate_commands() -> tuple[tuple[tuple[str, ...], Mapping[str, str]], ...]:
             ),
             inherited,
         ),
+        ((_candidate_metadata_command(candidate_base)), inherited),
     )
 
 
-def run_deterministic_gates() -> None:
+def run_deterministic_gates(*, candidate_base: str | None = None) -> None:
     assert_version_contract()
     refresh_public_history()
     if _git("rev-parse", "--is-shallow-repository") != "false":
         raise GateError("public-history gate requires a complete, non-shallow clone")
-    for argv, env in _gate_commands():
+    for argv, env in _gate_commands(candidate_base):
         print("+", " ".join(argv), flush=True)
         _run(argv, env=env)
 
@@ -276,6 +303,42 @@ def verify_archives(wheel: Path, sdist: Path) -> None:
         missing_root = sorted(required_root_files - root_files)
         if missing_root:
             raise GateError(f"sdist is missing required root files: {missing_root}")
+
+
+def assert_installed_capabilities(output: str, expected_version: str) -> None:
+    """Reject an installed CLI whose advertised contracts drift from its package."""
+
+    try:
+        manifest = json.loads(output)
+        commands = set(manifest["cli_commands"])
+        joins = set(manifest["runtime"]["join_policies"])
+        schemas = manifest["schema_versions"]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise GateError("installed capability manifest is malformed") from exc
+    if manifest.get("version") != "graph-engineering/capabilities/v1":
+        raise GateError("installed capability manifest version is unsupported")
+    if manifest.get("package_version") != expected_version:
+        raise GateError("installed capability manifest package version drifted")
+    if not REQUIRED_CAPABILITY_COMMANDS.issubset(commands):
+        raise GateError("installed capability manifest omits CLI commands")
+    if joins != {"all", "all_settled", "any", "n_of_m", "majority"}:
+        raise GateError("installed capability manifest join policies drifted")
+    required_schemas = {
+        "workflow",
+        "project",
+        "product_contract",
+        "assessment",
+        "lifecycle_event",
+        "run_context",
+        "handoff",
+        "status_projection",
+    }
+    if set(schemas) != required_schemas or any(
+        not isinstance(value, str) or not value for value in schemas.values()
+    ):
+        raise GateError("installed capability manifest schema versions drifted")
+    if manifest.get("features", {}).get("worker_smoke") is not True:
+        raise GateError("installed capability manifest omits worker smoke")
 
 
 def build_and_smoke(scratch: Path) -> tuple[Path, Path]:
@@ -333,6 +396,13 @@ def build_and_smoke(scratch: Path) -> tuple[Path, Path]:
         raise GateError(
             "installed graph-engineer version does not match project.version"
         )
+    capability_result = _run(
+        [str(graph_console), "capabilities", "--json"],
+        cwd=scratch,
+        env=clean_env,
+        capture=True,
+    )
+    assert_installed_capabilities(capability_result.stdout, expected_version)
     return wheel, sdist
 
 
@@ -344,13 +414,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--dry-run", action="store_true", help="pass --dry-run to uv publish"
     )
+    parser.add_argument(
+        "--candidate-base",
+        help="reviewed ancestor used to scan only candidate commit metadata",
+    )
     args = parser.parse_args(argv)
     try:
         if args.command == "publish":
             refresh_public_history()
             refresh_release_tag()
             assert_release_context(require_remote=True)
-        run_deterministic_gates()
+        run_deterministic_gates(candidate_base=args.candidate_base)
         scratch_root = os.environ.get("TMPDIR")
         if not scratch_root:
             raise GateError("TMPDIR must point at disk-backed scratch")
@@ -379,6 +453,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "history",
                     ]
                 )
+                _run(_candidate_metadata_command(args.candidate_base))
                 publish = ["uv", "publish"]
                 if args.dry_run:
                     publish.append("--dry-run")

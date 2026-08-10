@@ -20,6 +20,16 @@ Operators can add organization-specific deny rules without committing private va
 by setting `GRAPH_ENGINEERING_DENY_PATTERNS` to a private tab-separated file whose
 records are `rule-name<TAB>regular-expression`.
 
+CI also scans author, committer, and message metadata for only the commits introduced
+after a reviewed base. The base is explicit, or comes from Woodpecker's pull-request
+target/pre-push SHA. This keeps legacy public history from blocking unrelated fixes while
+preventing a candidate from publishing personal identities, controls, oversized metadata,
+or credential-like text. The default identity policy accepts the project's generic names
+and GitHub `users.noreply.github.com` addresses. A project may approve another exact generic
+name and email with `--allowed-commit-name` and `--allowed-commit-email`; do not use those
+options to allowlist a person's identity. Findings reveal only a short commit object ID and
+an opaque rule ID.
+
 These checks are defense in depth, not a substitute for secret rotation. If a real
 credential ever enters Git history, revoke it first and follow a coordinated history
 rewrite and disclosure process.

@@ -7,8 +7,10 @@ import pytest
 
 from graph_engineering.public_safety import (
     ScanError,
+    _commit_metadata_rules,
     load_extra_rules,
     main,
+    scan_candidate_commit_metadata,
     scan_history,
     scan_worktree,
 )
@@ -37,6 +39,20 @@ def commit(repo: Path, name: str, content: bytes) -> str:
         stdout=subprocess.PIPE,
         text=True,
     ).stdout.strip()
+
+
+def head(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout.strip()
+
+
+def use_safe_commit_identity(repo: Path) -> None:
+    git(repo, "config", "user.name", "poweredbyGEN")
+    git(repo, "config", "user.email", "poweredbygen@users.noreply.github.com")
 
 
 def test_tree_scans_tracked_and_untracked_without_echoing_secrets(
@@ -138,3 +154,152 @@ def test_no_shell_execution_is_used() -> None:
         Path(__file__).parents[1] / "src" / "graph_engineering" / "public_safety.py"
     )
     assert "shell=True" not in source.read_text()
+
+
+def test_candidate_metadata_ignores_unsafe_legacy_base_and_accepts_safe_candidate(
+    tmp_path: Path,
+) -> None:
+    repo = make_repo(tmp_path)
+    commit(repo, "legacy.txt", b"legacy\n")
+    base = head(repo)
+    use_safe_commit_identity(repo)
+    commit(repo, "candidate.txt", b"candidate\n")
+
+    # intent: a legacy identity on the trusted base must not block every future PR.
+    assert scan_candidate_commit_metadata(repo, trusted_base=base) == []
+
+
+def test_candidate_metadata_rejects_unapproved_person_identity(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    use_safe_commit_identity(repo)
+    commit(repo, "base.txt", b"base\n")
+    base = head(repo)
+    git(repo, "config", "user.name", "Example Person")
+    git(repo, "config", "user.email", "person@example.com")
+    commit(repo, "candidate.txt", b"candidate\n")
+
+    # intent: deleting private data from blobs cannot hide it in candidate identities.
+    assert {
+        item.rule for item in scan_candidate_commit_metadata(repo, trusted_base=base)
+    } == {
+        "commit-email-policy",
+        "commit-name-policy",
+    }
+
+
+def test_candidate_metadata_redacts_sensitive_commit_message(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = make_repo(tmp_path)
+    use_safe_commit_identity(repo)
+    commit(repo, "base.txt", b"base\n")
+    base = head(repo)
+    (repo / "candidate.txt").write_text("safe blob\n")
+    git(repo, "add", "--", "candidate.txt")
+    secret = "ghp" + "_abcdefghijklmnopqrstuvwxyz123456"
+    git(repo, "commit", "-qm", f"accidental {secret}")
+
+    assert (
+        main(
+            [
+                "--repo",
+                str(repo),
+                "--mode",
+                "candidate-metadata",
+                "--candidate-base",
+                base,
+            ]
+        )
+        == 1
+    )
+    output = capsys.readouterr().out
+    assert "commit-sensitive-pattern-policy" in output
+    assert secret not in output
+    assert "accidental" not in output
+
+
+def test_candidate_metadata_rejects_personal_identity_trailers(
+    tmp_path: Path,
+) -> None:
+    repo = make_repo(tmp_path)
+    use_safe_commit_identity(repo)
+    commit(repo, "base.txt", b"base\n")
+    base = head(repo)
+    (repo / "candidate.txt").write_text("safe blob\n")
+    git(repo, "add", "--", "candidate.txt")
+    git(
+        repo,
+        "commit",
+        "-qm",
+        "candidate\n\nCo-authored-by: Example Person <person@example.com>",
+    )
+
+    # intent: a safe primary identity cannot smuggle a person's identity in trailers.
+    assert {
+        item.rule for item in scan_candidate_commit_metadata(repo, trusted_base=base)
+    } == {"commit-email-policy", "commit-name-policy"}
+
+
+def test_candidate_metadata_accepts_exact_project_approved_generic_identity(
+    tmp_path: Path,
+) -> None:
+    repo = make_repo(tmp_path)
+    use_safe_commit_identity(repo)
+    commit(repo, "base.txt", b"base\n")
+    base = head(repo)
+    git(repo, "config", "user.name", "Release Automation")
+    git(repo, "config", "user.email", "release@example.org")
+    commit(repo, "candidate.txt", b"candidate\n")
+
+    assert (
+        scan_candidate_commit_metadata(
+            repo,
+            trusted_base=base,
+            allowed_names=["Release Automation"],
+            allowed_emails=["release@example.org"],
+        )
+        == []
+    )
+
+
+def test_candidate_metadata_fails_closed_on_count_and_non_ancestor(
+    tmp_path: Path,
+) -> None:
+    repo = make_repo(tmp_path)
+    use_safe_commit_identity(repo)
+    commit(repo, "base.txt", b"base\n")
+    base = head(repo)
+    commit(repo, "candidate.txt", b"candidate\n")
+    candidate = head(repo)
+
+    with pytest.raises(ScanError, match="commit-count limit"):
+        scan_candidate_commit_metadata(repo, trusted_base=base, max_commits=0)
+    with pytest.raises(ScanError, match="not an ancestor"):
+        scan_candidate_commit_metadata(repo, trusted_base=candidate, candidate=base)
+
+
+def test_candidate_metadata_rejects_controls_and_oversized_fields() -> None:
+    tree = b"0" * 40
+    raw = (
+        b"tree "
+        + tree
+        + b"\nauthor poweredbyGEN <poweredbygen@users.noreply.github.com> 1 +0000"
+        + b"\ncommitter poweredbyGEN\x1b <poweredbygen@users.noreply.github.com> 1 +0000"
+        + b"\n\nmessage"
+    )
+    assert "commit-control-policy" in _commit_metadata_rules(
+        raw,
+        allowed_names=frozenset({"poweredbyGEN", "poweredbyGEN\x1b"}),
+        allowed_emails=frozenset(),
+        rules=(),
+        max_commit_bytes=1_000,
+        max_message_bytes=1_000,
+    )
+    assert _commit_metadata_rules(
+        raw,
+        allowed_names=frozenset({"poweredbyGEN"}),
+        allowed_emails=frozenset(),
+        rules=(),
+        max_commit_bytes=10,
+        max_message_bytes=1_000,
+    ) == {"commit-size-policy"}

@@ -87,7 +87,17 @@ class OpenAICompatibleAdapter:
     organization_env: str | None = None
 
 
-Adapter = SubprocessAdapter | OpenAICompatibleAdapter
+@dataclass(frozen=True)
+class A2AAdapter:
+    """Private configuration for an independently operated A2A worker."""
+
+    agent_card_url: str
+    auth_env: str
+    allowed_skills: tuple[str, ...]
+    expected_identity: str
+
+
+Adapter = SubprocessAdapter | OpenAICompatibleAdapter | A2AAdapter
 
 
 @dataclass(frozen=True)
@@ -101,7 +111,9 @@ class Profile:
     def adapter_kind(self) -> str:
         if isinstance(self.adapter, SubprocessAdapter):
             return "subprocess"
-        return "openai-compatible"
+        if isinstance(self.adapter, OpenAICompatibleAdapter):
+            return "openai-compatible"
+        return "a2a"
 
 
 @dataclass(frozen=True)
@@ -318,6 +330,40 @@ def _parse_openai(value: Any, path: str) -> OpenAICompatibleAdapter:
     return OpenAICompatibleAdapter(endpoint_env, api_key_env, organization_env)
 
 
+def _parse_a2a(value: Any, path: str) -> A2AAdapter:
+    table = _table(value, path)
+    _strict_keys(
+        table,
+        {"agent_card_url", "auth_env", "allowed_skills", "expected_identity"},
+        path,
+    )
+    card_url = _nonempty(table.get("agent_card_url"), f"{path}.agent_card_url")
+    if not card_url.startswith(("https://", "http://127.0.0.1:", "http://localhost:")):
+        raise _error(
+            "INSECURE_A2A_URL",
+            f"{path}.agent_card_url",
+            "must use HTTPS (loopback HTTP is allowed for conformance tests)",
+        )
+    auth_env = _env_name(table.get("auth_env"), f"{path}.auth_env")
+    raw_skills = table.get("allowed_skills")
+    if (
+        not isinstance(raw_skills, list)
+        or not raw_skills
+        or not all(
+            isinstance(item, str) and _NAME.fullmatch(item) for item in raw_skills
+        )
+    ):
+        raise _error(
+            "TYPE_ERROR",
+            f"{path}.allowed_skills",
+            "must be a non-empty portable-name array",
+        )
+    if len(set(raw_skills)) != len(raw_skills):
+        raise _error("DUPLICATE_VALUE", f"{path}.allowed_skills", "contains duplicates")
+    identity = _nonempty(table.get("expected_identity"), f"{path}.expected_identity")
+    return A2AAdapter(card_url, auth_env, tuple(raw_skills), identity)
+
+
 def parse_agent_config(data: Mapping[str, Any]) -> AgentConfig:
     """Parse and validate a merged configuration mapping."""
 
@@ -335,29 +381,40 @@ def parse_agent_config(data: Mapping[str, Any]) -> AgentConfig:
         table = _table(raw_profile, path)
         _strict_keys(
             table,
-            {"adapter", "model", "capabilities", "subprocess", "openai_compatible"},
+            {
+                "adapter",
+                "model",
+                "capabilities",
+                "subprocess",
+                "openai_compatible",
+                "a2a",
+            },
             path,
         )
         adapter_kind = table.get("adapter")
-        if adapter_kind not in {"subprocess", "openai-compatible"}:
+        if adapter_kind not in {"subprocess", "openai-compatible", "a2a"}:
             raise _error(
                 "INVALID_VALUE",
                 f"{path}.adapter",
-                "must be subprocess or openai-compatible",
+                "must be subprocess, openai-compatible, or a2a",
             )
-        adapter_key = (
-            "subprocess" if adapter_kind == "subprocess" else "openai_compatible"
-        )
-        other_key = "openai_compatible" if adapter_key == "subprocess" else "subprocess"
-        if adapter_key not in table or other_key in table:
+        adapter_key = {
+            "subprocess": "subprocess",
+            "openai-compatible": "openai_compatible",
+            "a2a": "a2a",
+        }[adapter_kind]
+        other_keys = {"subprocess", "openai_compatible", "a2a"} - {adapter_key}
+        if adapter_key not in table or any(key in table for key in other_keys):
             raise _error(
                 "ADAPTER_CONFIG", path, f"must define only [{path[2:]}.{adapter_key}]"
             )
         adapter: Adapter
         if adapter_kind == "subprocess":
             adapter = _parse_subprocess(table[adapter_key], f"{path}.{adapter_key}")
-        else:
+        elif adapter_kind == "openai-compatible":
             adapter = _parse_openai(table[adapter_key], f"{path}.{adapter_key}")
+        else:
+            adapter = _parse_a2a(table[adapter_key], f"{path}.{adapter_key}")
         profiles[name] = Profile(
             name=name,
             model=_nonempty(table.get("model"), f"{path}.model"),
@@ -489,7 +546,12 @@ def load_agent_config(
     else:
         local = None
     if local is not None and local.is_file():
-        merged = _merge(merged, _read_toml(local))
+        local_values = _read_toml(local)
+        # The ignored local file also owns the per-project host/checkout boundary.
+        # Project policy validates that section; worker parsing must not treat it as
+        # an executable profile surface or merge it into the public configuration.
+        local_values.pop("execution", None)
+        merged = _merge(merged, local_values)
     return parse_agent_config(merged)
 
 

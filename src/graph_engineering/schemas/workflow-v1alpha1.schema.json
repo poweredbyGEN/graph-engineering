@@ -9,6 +9,16 @@
     "version": {"const": "graph-engineering/v1alpha1"},
     "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
     "goal": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "product_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "generation", "digest"],
+      "properties": {
+        "version": {"const": "graph-engineering/product-contract/v2"},
+        "generation": {"type": "integer", "minimum": 1},
+        "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
     "budgets": {
       "type": "object",
       "additionalProperties": false,
@@ -40,6 +50,7 @@
       "required": ["schema"],
       "properties": {
         "schema": {"oneOf": [{"type": "object"}, {"type": "string", "minLength": 1}]},
+        "acceptance_schema": {"type": "object"},
         "required": {"type": "boolean", "default": true}
       }
     },
@@ -60,6 +71,43 @@
         "max_attempts": {"type": "integer", "minimum": 1, "maximum": 20},
         "no_progress_limit": {"type": "integer", "minimum": 1, "maximum": 10}
       }
+    },
+    "progress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_elapsed_seconds": {"type": "integer", "minimum": 1, "maximum": 604800},
+        "max_deterministic_checks": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
+          "description": "Maximum deterministic acceptance-check evaluations across attempts."
+        },
+        "max_commands": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
+          "deprecated": true,
+          "description": "Compatibility alias for max_deterministic_checks; it never counts provider/tool commands."
+        }
+      },
+      "not": {"required": ["max_deterministic_checks", "max_commands"]}
+    },
+    "join": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy"],
+      "properties": {
+        "policy": {"enum": ["all", "all_settled", "any", "n_of_m", "majority"]},
+        "n": {"type": "integer", "minimum": 1}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"policy": {"const": "n_of_m"}}},
+          "then": {"required": ["n"]},
+          "else": {"not": {"required": ["n"]}}
+        }
+      ]
     },
     "repairTarget": {
       "type": "object",
@@ -117,7 +165,18 @@
         "permission": {"enum": ["read", "write", "external", "destructive"]},
         "checks": {"type": "array", "items": {"$ref": "#/$defs/check"}},
         "retry": {"$ref": "#/$defs/retry"},
+        "progress": {"$ref": "#/$defs/progress"},
+        "join": {"$ref": "#/$defs/join"},
         "repair": {"$ref": "#/$defs/repair"},
+        "deployment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["adapter", "target"],
+          "properties": {
+            "adapter": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$"},
+            "target": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}
+          }
+        },
         "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 86400},
         "required": {"type": "boolean"},
         "approval": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},

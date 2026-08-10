@@ -6,6 +6,27 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- An authoritative `graph-engineer capabilities --json` runtime manifest and opt-in,
+  isolated, bounded, redacted `doctor --smoke` validation for selected private workers.
+- Disposable smoke aliases for CLIs that hardcode temporary or local data/state paths, while
+  preserving read-only repository/host boundaries and true parent-escape detection.
+- Deterministic `all`, `all_settled`, `any`, `n_of_m`, and `majority` joins with durable
+  settlement evidence and crash-safe resume.
+- Immutable run context, a hash-chained versioned lifecycle ledger, and bounded
+  `graph-engineer trace` output.
+- A bounded A2A 1.x HTTP+JSON client for independently operated remote workers; all remote
+  artifacts remain subject to local schemas, worktree scope, checks, and integration.
+- Digest-bound cross-engine handoffs, bounded status/Herdr projection, read-only adoption
+  assessment, and experiment-first mobile/class workflow templates.
+- Project discovery/init with frozen product contracts, sanctioned execution boundaries, and
+  stale-source rejection; durable progress supervision with critical-path/frontier evidence.
+- Private host/checkout authorization, pre-dispatch project-policy revalidation, and atomic
+  repository/base/contract/workflow run-scope claims with exact-resume identity.
+- Portable credential-free repository identity shared by assessment, run-scope claims, runtime
+  receipts, and handoffs, with an execution-blocking origin-less fallback.
+
 ## [0.1.0a1] - 2026-08-08
 
 ### Added

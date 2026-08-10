@@ -20,6 +20,8 @@ MCP service. Extend contracts and evidence, not prose promises.
 11. Public code contains templates and environment-variable names only. Private registries,
     endpoints, credentials, and organization policy remain user-side.
 12. Turn every enforceable lesson into a regression and sabotage-check it.
+13. Keep the transport layers distinct: MCP exposes capabilities; A2A delegates to an independent
+    agent; the graph runtime alone owns control flow and acceptance.
 
 ## Change procedure
 
@@ -58,6 +60,34 @@ Test malformed output, progress-event spoofing, trailing garbage, output caps, c
 live child, timeout/descendant cleanup, secret non-inheritance, scope escape, schema mismatch, and
 resume identity drift. Add public templates without real model IDs, hosts, endpoints, or secrets;
 put operational values in private configuration.
+
+## Decide whether to add A2A
+
+Add an A2A profile only when a graph node must cross an independent deployment, organization,
+runtime, or ownership boundary. Keep a local subprocess profile for CLIs you already control. Use
+MCP when the missing thing is a tool, API, data source, or resource rather than a peer agent.
+
+An A2A client adapter must:
+
+- implement one declared protocol version and binding exactly, including media types and errors;
+- fetch and validate the Agent Card, identity, interface, authorization requirement, and allowed
+  skills before dispatch;
+- keep endpoint, identity, token references, and organization policy in private configuration;
+- pin card/interface/protocol/capability digests and persist the remote task ID;
+- fence task binding to the exact live local attempt and resume by polling the same task;
+- bound request/result bytes, polling, deadline, cancellation, and status transitions;
+- normalize exactly one final structured artifact and validate it locally;
+- require a canonical changeset for remote code writes, apply it to a local isolated worktree, and
+  rerun deterministic local gates;
+- prevent remote profiles from inheriting local MCP, approval, integration, merge, or deployment
+  authority.
+
+Test redirect/cross-origin drift, legacy or unsupported cards, malformed security requirements,
+identity/skill/capability drift, duplicate submission, stale late binding, task loss, cancellation,
+timeout, malformed/oversized artifacts, schema mismatch, and out-of-scope changes. Document any
+unimplemented binding, streaming, auth-required, or idempotency behavior explicitly.
+
+Primary A2A reference: <https://a2a-protocol.org/latest/specification/>.
 
 ## Decide whether to add an MCP service
 
@@ -119,6 +149,10 @@ bounded discovery smoke. Set a worker profile's `mcp = true` only after its tool
 negotiated capability intersection are proven. Persist the profile ID, server IDs, protocol
 versions, capability hashes, and skill digests in the node receipt so a retry cannot silently gain
 authority.
+
+If a remote A2A worker uses MCP internally, that is the remote operator's capability boundary. Do
+not copy the caller's MCP registry into its request. The local graph receipt pins only the allowed
+A2A skill and negotiated remote capability identity; local evidence still decides acceptance.
 
 Primary specifications and implementation references:
 

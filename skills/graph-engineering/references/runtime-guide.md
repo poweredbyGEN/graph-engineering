@@ -96,6 +96,8 @@ The run output prints its state database. The default is
 state=~/.local/state/graph-engineering/runs/auth-audit-001/state.db
 
 graph-engineer status --state "$state" --run-id auth-audit-001 --json
+graph-engineer status --state "$state" --run-id auth-audit-001 --projection --json
+graph-engineer trace --state "$state" --run-id auth-audit-001 --json
 graph-engineer run "$workflow" --repo "$PWD" --run-id auth-audit-001 \
   --state "$state" --resume --json
 ```
@@ -103,11 +105,47 @@ graph-engineer run "$workflow" --repo "$PWD" --run-id auth-audit-001 \
 Resume with the exact workflow, run ID, repository, base SHA, profile identity, and state path.
 Workflow/profile/base drift, missing or corrupt receipts, and invalid artifacts fail closed. A
 non-replay-safe interrupted effect enters reconciliation; never edit state to force it forward.
+For a run created by a pre-lifecycle release, inspect it first and explicitly add
+`--bootstrap-legacy-lifecycle` to the resume command. That one-time authorization records a legacy
+bootstrap fact; it is never inferred and is not needed for new runs.
 
 Read status for per-node attempts, errors, receipts, accepted artifacts, and worktree paths. The
-accepted result remains in the integration worktree; the runtime does not merge or deploy it.
+bounded `trace` output verifies and renders immutable run context plus versioned lifecycle facts;
+ledger corruption or deletion fails closed. The accepted result remains in the integration
+worktree; the runtime does not merge or deploy it.
 Review the combined diff and evidence, then hand that exact accepted change to the project's normal
 branch/PR process or `$universal-deploy`.
+
+To move orchestration from Claude to Codex, Grok, or another configured host without replacing the
+run with a prose summary, export and consume an exact handoff:
+
+```bash
+graph-engineer handoff --state "$state" --run-id auth-audit-001 \
+  --output auth-audit-001.handoff.json --json
+graph-engineer run "$workflow" --repo "$PWD" --run-id auth-audit-001 \
+  --state "$state" --resume --handoff auth-audit-001.handoff.json --json
+```
+
+The receiver must have the same workflow, repository base, private resolved profiles, durable
+state/artifacts, and authorization. Handoff verifies those facts; it does not copy secrets or grant
+authority. Use `status --projection` for bounded JSON that a Herdr adapter or terminal can render;
+the runtime does not mutate Herdr or require a visual builder.
+
+Before adopting graph engineering in an existing repository, run
+`graph-engineer assess --repo "$PWD" --json`. It writes nothing and returns prioritized evidence
+gaps. Add `--output assessment.json` only when a reviewed init flow will consume the stable
+`graph-engineering/assessment/v1` artifact. The consumer must reject it after its bound HEAD or
+tracked/untracked source digest changes; an old advisory assessment is not current project evidence.
+
+Terse host requests all mean the same enforced path:
+
+- Claude: `Use $graph-engineering and the portable runtime for this change.`
+- Codex: `Use $graph-engineering; validate, plan, run, and report exact evidence.`
+- Grok: `Use $graph-engineering with isolated lanes and the portable runtime.`
+
+If the portable CLI is unavailable, the host may use native subagents only after disclosing that
+durable leases, fencing, schema-bound handoff, localized repair, and verified resume are procedural
+rather than mechanically enforced. Native fallback is not silently equivalent.
 
 ## 6. Register the graph task MCP service
 
@@ -130,7 +168,18 @@ Verify with `claude mcp get graph-task`, `codex mcp get graph-task`, and
 domain. Legacy clients negotiate their supported handshake version; capable clients can use the
 stateless `2026-07-28` lifecycle and optional Tasks extension.
 
-## 7. Troubleshoot without bypassing gates
+## 7. Add an A2A remote worker only when needed
+
+Use `adapter = "a2a"` in the private user configuration when a node must be delegated to an
+independently operated agent. Configure its private Agent Card URL, Bearer token environment
+reference, expected identity, and exact allowed skills. Set `mcp = false`; the remote agent may use
+its own tools but cannot inherit local MCP authority. Run `doctor` before dispatch.
+
+The current adapter supports the A2A 1.x HTTP+JSON polling path. It pins the card and task identity,
+and remote code changes still pass through a local worktree and deterministic checks. Read the
+repository's `docs/A2A.md` for the exact subset and residual idempotency risk.
+
+## 8. Troubleshoot without bypassing gates
 
 - `doctor` fails: fix config mode, missing executable/environment reference, or disk-backed
   `TMPDIR`; do not weaken the probe.
@@ -145,3 +194,5 @@ stateless `2026-07-28` lifecycle and optional Tasks extension.
   when one producer is genuinely responsible.
 - MCP works on one host but not another: inspect the client's negotiated version and capabilities;
   registration does not imply Tasks or other extensions are supported.
+- A2A preflight fails: repair the private URL/identity/skill/auth profile or the remote Agent Card;
+  never weaken identity, origin, version, or capability pinning to make a card pass.

@@ -1,0 +1,129 @@
+{
+  "version": "graph-engineering/v1alpha1",
+  "id": "frontend_evidence",
+  "goal": "Run one explicitly authorized live UI suite and return immutable checkpoint evidence",
+  "budgets": {
+    "max_nodes": 2,
+    "max_concurrency": 1,
+    "max_attempts_per_node": 1,
+    "max_total_attempts": 2,
+    "timeout_seconds": 1800
+  },
+  "nodes": [
+    {
+      "id": "authorize_live",
+      "kind": "approval",
+      "task": "Record trusted host approval for this named live browser suite and target.",
+      "needs": [],
+      "inputs": {},
+      "outputs": {
+        "decision": {
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["approved", "suite", "target"],
+            "properties": {
+              "approved": {"const": true},
+              "suite": {"type": "string", "minLength": 1, "maxLength": 128},
+              "target": {"type": "string", "minLength": 1, "maxLength": 256}
+            }
+          }
+        }
+      },
+      "workspace": "read-only",
+      "permission": "read",
+      "checks": [{"id": "authorization_recorded", "argv": ["true"]}],
+      "retry": {"max_attempts": 1, "no_progress_limit": 1},
+      "required": true
+    },
+    {
+      "id": "run_ui_suite",
+      "kind": "agent",
+      "task": "Run exactly the approved named suite. Never accept arbitrary shell text. Preserve partial evidence on failure and do not retry after an ambiguous live trigger.",
+      "needs": ["authorize_live"],
+      "inputs": {"authorization": "authorize_live.decision"},
+      "outputs": {
+        "evidence": {
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["run_id", "suite", "tier", "status", "checkpoints", "evidence_digest"],
+            "properties": {
+              "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"},
+              "suite": {"type": "string", "minLength": 1, "maxLength": 128},
+              "tier": {"enum": ["live", "costly", "manual"]},
+              "status": {"enum": ["succeeded", "failed", "crashed", "blocked"]},
+              "checkpoints": {
+                "type": "object",
+                "additionalProperties": false,
+                "minProperties": 1,
+                "properties": {
+                  "prepared": {"$ref": "#/$defs/evidence_file"},
+                  "triggered": {"$ref": "#/$defs/evidence_file"},
+                  "waiting": {"$ref": "#/$defs/evidence_file"},
+                  "result": {"$ref": "#/$defs/evidence_file"},
+                  "reload": {"$ref": "#/$defs/evidence_file"},
+                  "partial": {"$ref": "#/$defs/evidence_file"}
+                }
+              },
+              "evidence_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            },
+            "oneOf": [
+              {
+                "properties": {
+                  "status": {"const": "succeeded"},
+                  "checkpoints": {
+                    "required": ["prepared", "triggered", "waiting", "result", "reload"]
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "status": {"enum": ["failed", "crashed", "blocked"]}
+                }
+              }
+            ],
+            "$defs": {
+              "evidence_file": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path", "sha256", "bytes", "media_type"],
+                "properties": {
+                  "path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
+                  "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                  "bytes": {"type": "integer", "minimum": 1},
+                  "media_type": {"type": "string", "minLength": 1, "maxLength": 128}
+                }
+              }
+            }
+          },
+          "acceptance_schema": {
+            "type": "object",
+            "required": ["status", "checkpoints"],
+            "properties": {
+              "status": {"const": "succeeded"},
+              "checkpoints": {
+                "type": "object",
+                "required": ["prepared", "triggered", "waiting", "result", "reload"]
+              }
+            }
+          }
+        }
+      },
+      "profile": "browser_runner",
+      "workspace": "worktree",
+      "permission": "external",
+      "approval": "authorize_live",
+      "effect": "non_idempotent_write",
+      "checks": [
+        {
+          "id": "evidence_contract",
+          "argv": ["python", "-m", "pytest", "tests/e2e/test_evidence_contract.py"]
+        }
+      ],
+      "retry": {"max_attempts": 1, "no_progress_limit": 1},
+      "required": true
+    }
+  ],
+  "outputs": {"evidence": "run_ui_suite.evidence"}
+}

@@ -15,6 +15,7 @@ import os
 import sqlite3
 import tempfile
 import threading
+import time
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -33,8 +34,30 @@ from .adapters import (
     execute_profile,
 )
 from .artifacts import ArtifactError, canonical_json
-from .config import AgentConfig, OpenAICompatibleAdapter, Profile, get_profile
+from .config import (
+    A2AAdapter,
+    AgentConfig,
+    OpenAICompatibleAdapter,
+    Profile,
+    get_profile,
+)
 from .contracts import validate_workflow
+from .lifecycle import (
+    LifecycleEvent,
+    LifecycleStore,
+    RunContext,
+    RunContextProvider,
+    StaticRunContextProvider,
+)
+from .project import (
+    PROJECT_MANIFEST,
+    ExecutionIdentity,
+    ProjectPolicy,
+    ProjectPolicyError,
+    execution_identity,
+    load_private_execution_binding,
+    load_project_policy,
+)
 from .runtime import CheckResult, ExecutionContext, Executor, RunResult, Scheduler
 from .worktrees import ChangeSet, Worktree, WorktreeError, WorktreeManager
 
@@ -119,6 +142,8 @@ class OrchestrationResult:
     agent_receipts: Mapping[str, ExecutionReceipt]
     check_receipts: tuple[CheckCommandReceipt, ...]
     worktrees: Mapping[str, Path]
+    run_context: RunContext
+    lifecycle_events: tuple[LifecycleEvent, ...]
 
 
 def change_set_value(change: ChangeSet) -> dict[str, Any]:
@@ -186,6 +211,9 @@ class PortableRuntime:
         approvals: Mapping[str, Mapping[str, Any]] | None = None,
         environ: Mapping[str, str] | None = None,
         agent_limits: ExecutionLimits | None = None,
+        context_provider: RunContextProvider | None = None,
+        bootstrap_legacy_lifecycle: bool = False,
+        project_policy: ProjectPolicy | None = None,
     ):
         validate_workflow(workflow)
         self.workflow = workflow
@@ -193,12 +221,59 @@ class PortableRuntime:
         self.config = config
         self.manager = WorktreeManager(repo)
         self.base_sha = self.manager.resolve_base(base)
+        self.project_policy = project_policy
+        if (
+            self.project_policy is None
+            and (self.manager.repo / PROJECT_MANIFEST).exists()
+        ):
+            self.project_policy = load_project_policy(self.manager.repo)
+        if self.project_policy is not None:
+            if self.project_policy.repo != self.manager.repo:
+                raise OrchestrationError(
+                    "WRONG_REPOSITORY_ROOT",
+                    "project policy belongs to a different repository root",
+                )
+            try:
+                self.project_policy.preflight(workflow, base_sha=self.base_sha)
+                private_binding = load_private_execution_binding(self.manager.repo)
+            except ProjectPolicyError as exc:
+                raise OrchestrationError(exc.code, exc.message) from exc
+            self.private_execution_digest: str | None = private_binding.digest
+            self.execution_identity: ExecutionIdentity | None = execution_identity(
+                self.project_policy, workflow, base_sha=self.base_sha
+            )
+        else:
+            self.private_execution_digest = None
+            self.execution_identity = None
         self.state_path = Path(state_path)
         self.artifact_root = Path(artifact_root)
         self.custom_executors = dict(executors or {})
         self.approvals = {key: dict(value) for key, value in (approvals or {}).items()}
         self.environ = dict(os.environ if environ is None else environ)
         self.agent_limits = agent_limits or ExecutionLimits()
+        caller_context = (
+            context_provider.provide() if context_provider is not None else {}
+        )
+        self.context_provider = StaticRunContextProvider(
+            {
+                **caller_context,
+                "workflow_digest": hashlib.sha256(canonical_json(workflow)).hexdigest(),
+                "base_sha": self.base_sha,
+                **(
+                    {
+                        "product_contract_version": self.project_policy.product_contract.version,
+                        "product_contract_generation": self.project_policy.product_contract.generation,
+                        "product_contract_digest": self.project_policy.product_contract.digest,
+                        "project_policy_digest": self.project_policy.digest,
+                        "private_execution_digest": self.private_execution_digest,
+                        "repository_digest": self.execution_identity.repository_digest,
+                    }
+                    if self.project_policy is not None
+                    else {}
+                ),
+            }
+        )
+        self.bootstrap_legacy_lifecycle = bootstrap_legacy_lifecycle
         self._lock = threading.Lock()
         self._run_lock = threading.Lock()
         self._profiles: dict[str, Profile] = {}
@@ -239,6 +314,11 @@ class PortableRuntime:
                         "UNSUPPORTED_ADAPTER",
                         f"profile {profile.name!r} uses openai-compatible execution, "
                         "which is not implemented by PortableRuntime",
+                    )
+                if isinstance(profile.adapter, A2AAdapter) and profile.capabilities.mcp:
+                    raise OrchestrationError(
+                        "A2A_AUTHORITY",
+                        f"remote profile {profile.name!r} may not inherit local MCP authority",
                     )
                 if node.get("model") not in {None, profile.model}:
                     raise OrchestrationError(
@@ -356,14 +436,52 @@ class PortableRuntime:
                     run_id TEXT PRIMARY KEY,
                     base_sha TEXT NOT NULL,
                     profile_manifest_sha256 TEXT NOT NULL,
-                    profile_manifest_json TEXT NOT NULL
+                    profile_manifest_json TEXT NOT NULL,
+                    project_policy_sha256 TEXT,
+                    private_execution_sha256 TEXT,
+                    repository_sha256 TEXT,
+                    workflow_sha256 TEXT,
+                    product_contract_sha256 TEXT,
+                    product_contract_generation INTEGER
                 )
                 """
             )
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(runtime_manifests)")
+            }
+            for name, kind in (
+                ("project_policy_sha256", "TEXT"),
+                ("private_execution_sha256", "TEXT"),
+                ("repository_sha256", "TEXT"),
+                ("workflow_sha256", "TEXT"),
+                ("product_contract_sha256", "TEXT"),
+                ("product_contract_generation", "INTEGER"),
+            ):
+                if name not in columns:
+                    connection.execute(
+                        f"ALTER TABLE runtime_manifests ADD COLUMN {name} {kind}"
+                    )
+            identity = self.execution_identity
             try:
                 connection.execute(
-                    "INSERT INTO runtime_manifests VALUES (?, ?, ?, ?)",
-                    (run_id, self.base_sha, digest, encoded.decode("utf-8")),
+                    "INSERT INTO runtime_manifests("
+                    "run_id,base_sha,profile_manifest_sha256,profile_manifest_json,"
+                    "project_policy_sha256,private_execution_sha256,repository_sha256,"
+                    "workflow_sha256,product_contract_sha256,product_contract_generation) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        run_id,
+                        self.base_sha,
+                        digest,
+                        encoded.decode("utf-8"),
+                        self.project_policy.digest if self.project_policy else None,
+                        self.private_execution_digest,
+                        identity.repository_digest if identity else None,
+                        identity.workflow_digest if identity else None,
+                        identity.product_contract_digest if identity else None,
+                        identity.product_contract_generation if identity else None,
+                    ),
                 )
             except sqlite3.IntegrityError as exc:
                 raise OrchestrationError(
@@ -380,7 +498,9 @@ class PortableRuntime:
                 ).fetchone()
                 row = (
                     connection.execute(
-                        "SELECT base_sha,profile_manifest_sha256,profile_manifest_json "
+                        "SELECT base_sha,profile_manifest_sha256,profile_manifest_json,"
+                        "project_policy_sha256,private_execution_sha256,repository_sha256,"
+                        "workflow_sha256,product_contract_sha256,product_contract_generation "
                         "FROM runtime_manifests WHERE run_id=?",
                         (run_id,),
                     ).fetchone()
@@ -396,7 +516,7 @@ class PortableRuntime:
                 "RUN_MANIFEST_MISSING",
                 f"run {run_id!r} has no persisted execution identity",
             )
-        stored_base, stored_digest, stored_json = map(str, row)
+        stored_base, stored_digest, stored_json = map(str, row[:3])
         try:
             stored_profiles = json.loads(stored_json)
             canonical_stored = canonical_json(stored_profiles)
@@ -420,6 +540,43 @@ class PortableRuntime:
                 "PROFILE_MANIFEST_MISMATCH",
                 "profile, model, adapter, or capability identity changed since launch",
             )
+        identity = self.execution_identity
+        expected = (
+            self.project_policy.digest if self.project_policy else None,
+            self.private_execution_digest,
+            identity.repository_digest if identity else None,
+            identity.workflow_digest if identity else None,
+            identity.product_contract_digest if identity else None,
+            identity.product_contract_generation if identity else None,
+        )
+        if tuple(row[3:]) != expected:
+            raise OrchestrationError(
+                "RUN_IDENTITY_MISMATCH",
+                "project policy, private execution, repository, workflow, or product contract identity changed",
+            )
+
+    def _refresh_project_boundary(self) -> None:
+        if self.project_policy is None:
+            return
+        try:
+            # Preserve the stable drift taxonomy from the originally reviewed
+            # boundary before parsing a potentially half-edited replacement.
+            self.project_policy.preflight(self.workflow, base_sha=self.base_sha)
+            current = load_project_policy(self.manager.repo)
+            if current.digest != self.project_policy.digest:
+                raise ProjectPolicyError(
+                    "PROJECT_POLICY_DRIFT",
+                    "checked-in project policy changed after validation",
+                )
+            current.preflight(self.workflow, base_sha=self.base_sha)
+            binding = load_private_execution_binding(self.manager.repo)
+            if binding.digest != self.private_execution_digest:
+                raise ProjectPolicyError(
+                    "PRIVATE_EXECUTION_DRIFT",
+                    "private execution binding changed after validation",
+                )
+        except ProjectPolicyError as exc:
+            raise OrchestrationError(exc.code, exc.message) from exc
 
     def _bind_receipt_ledger(self, run_id: str, digest: str) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -657,6 +814,19 @@ class PortableRuntime:
         with self._lock:
             self._check_receipts.append(receipt)
             self._persist_receipts_locked(receipt.run_id)
+            LifecycleStore(self.state_path).append_if_active(
+                receipt.run_id,
+                f"check:{receipt.node_id}:{receipt.attempt}:{receipt.check_id}",
+                "check.completed",
+                node_id=receipt.node_id,
+                attempt=receipt.attempt,
+                payload={
+                    "check_id": receipt.check_id,
+                    "exit_code": receipt.exit_code,
+                    "stdout_digest": receipt.stdout_digest,
+                    "stderr_digest": receipt.stderr_digest,
+                },
+            )
 
     def _prompt(self, node: Mapping[str, Any], context: ExecutionContext) -> str:
         inputs = canonical_json(dict(context.inputs)).decode("utf-8")
@@ -690,6 +860,11 @@ class PortableRuntime:
         profile = self._profiles[node["id"]]
 
         def execute(context: ExecutionContext) -> Mapping[str, Any]:
+            if context.cancelled():
+                raise OrchestrationError(
+                    "PROGRESS_DEADLINE_EXCEEDED",
+                    "node reached its effective deadline before adapter dispatch",
+                )
             attempt_id = _attempt_name(node["id"], context.attempt)
             worktree = self.manager.create(
                 context.run_id, attempt_id, base=self.base_sha
@@ -712,18 +887,37 @@ class PortableRuntime:
                 allowed_root=worktree.path,
                 node_id=node["id"],
                 run_id=context.run_id,
+                attempt=context.attempt,
                 result_schema=schema,
                 base_sha=self.base_sha,
                 idempotency_key=context.idempotency_key,
+                changeset_schema=(
+                    CHANGE_SET_SCHEMA
+                    if node["permission"] in {"write", "destructive"}
+                    and isinstance(profile.adapter, A2AAdapter)
+                    else None
+                ),
+                state_path=self.state_path,
+                cancelled=context.cancelled,
+                dispatch_guard=self._refresh_project_boundary,
             )
             try:
                 node_timeout = node.get(
                     "timeout_seconds", self.workflow["budgets"]["timeout_seconds"]
                 )
+                effective_timeout = min(
+                    self.agent_limits.timeout_seconds, float(node_timeout)
+                )
+                if context.deadline_at is not None:
+                    remaining = context.deadline_at - time.time()
+                    if remaining <= 0:
+                        raise OrchestrationError(
+                            "PROGRESS_DEADLINE_EXCEEDED",
+                            "node reached its effective deadline before adapter dispatch",
+                        )
+                    effective_timeout = min(effective_timeout, remaining)
                 limits = ExecutionLimits(
-                    timeout_seconds=min(
-                        self.agent_limits.timeout_seconds, node_timeout
-                    ),
+                    timeout_seconds=effective_timeout,
                     terminate_grace_seconds=self.agent_limits.terminate_grace_seconds,
                     max_stdout_bytes=self.agent_limits.max_stdout_bytes,
                     max_stderr_bytes=self.agent_limits.max_stderr_bytes,
@@ -743,9 +937,17 @@ class PortableRuntime:
             self._record_agent_receipt(
                 f"{node['id']}#{context.attempt}", result.receipt
             )
+            if context.cancelled():
+                raise OrchestrationError(
+                    "PROGRESS_DEADLINE_EXCEEDED",
+                    "adapter result arrived after the effective node deadline",
+                )
 
             writing = node["permission"] in {"write", "destructive"}
             scope = node.get("write_scope", []) if writing else []
+            if writing and isinstance(profile.adapter, A2AAdapter):
+                change = change_set_from_value(result.changeset)
+                self.manager.apply(worktree.path, change, write_scope=scope)
             change = self.manager.capture(worktree, write_scope=scope)
             with self._lock:
                 self._snapshots[key] = change
@@ -758,6 +960,11 @@ class PortableRuntime:
 
     def _integration_executor(self, node: dict[str, Any]) -> Executor:
         def execute(context: ExecutionContext) -> Mapping[str, Any]:
+            if context.cancelled():
+                raise OrchestrationError(
+                    "PROGRESS_DEADLINE_EXCEEDED",
+                    "integration reached its effective deadline before execution",
+                )
             attempt_id = _attempt_name(node["id"], context.attempt)
             worktree = self.manager.create(
                 context.run_id, attempt_id, base=self.base_sha
@@ -769,6 +976,11 @@ class PortableRuntime:
             change_digests: list[str] = []
             all_paths: set[str] = set()
             for input_name, binding in sorted(node["inputs"].items()):
+                if context.cancelled():
+                    raise OrchestrationError(
+                        "PROGRESS_DEADLINE_EXCEEDED",
+                        "integration reached its effective deadline while applying inputs",
+                    )
                 producer_id, _ = binding.split(".", 1)
                 change = change_set_from_value(context.inputs[input_name])
                 if change.base_sha != self.base_sha:
@@ -794,6 +1006,11 @@ class PortableRuntime:
                 all_paths.update(change.changed_paths)
 
             snapshot = self.manager.capture(worktree, write_scope=integration_scope)
+            if context.cancelled():
+                raise OrchestrationError(
+                    "PROGRESS_DEADLINE_EXCEEDED",
+                    "integration result arrived after the effective node deadline",
+                )
             with self._lock:
                 self._snapshots[key] = snapshot
             output_name = next(iter(node["outputs"]))
@@ -870,6 +1087,14 @@ class PortableRuntime:
             if name in self.environ
         }
         timeout = check.get("timeout_seconds", node.get("timeout_seconds", 900))
+        if context.deadline_at is not None:
+            remaining = context.deadline_at - time.time()
+            if remaining <= 0:
+                raise OrchestrationError(
+                    "PROGRESS_DEADLINE_EXCEEDED",
+                    "deterministic check reached the effective node deadline",
+                )
+            timeout = min(float(timeout), remaining)
         limits = ExecutionLimits(
             timeout_seconds=timeout,
             terminate_grace_seconds=2,
@@ -941,6 +1166,8 @@ class PortableRuntime:
     def _run_once(self, run_id: str | None, *, resume: bool) -> OrchestrationResult:
         """Execute one run while the public method prevents shared-map races."""
 
+        self._refresh_project_boundary()
+
         scheduler = Scheduler(
             self.workflow,
             self.state_path,
@@ -948,20 +1175,28 @@ class PortableRuntime:
             self._executors(),
             self._check_runner,
         )
+        lifecycle = LifecycleStore(self.state_path)
         if resume:
             if run_id is None:
                 raise ValueError("resume requires run_id")
+            if scheduler.state.run(run_id)["workflow"] != self.workflow:
+                raise ValueError("resume workflow does not match persisted workflow")
             self._verify_execution_identity(run_id)
             self._load_receipts(run_id)
             actual_run_id = run_id
         else:
             actual_run_id = scheduler.state.create_run(
-                self.workflow, run_id or uuid.uuid4().hex
+                self.workflow, run_id or uuid.uuid4().hex, lifecycle=True
             )
             self._bind_execution_identity(actual_run_id)
+        run_context = lifecycle.initialize_context(
+            actual_run_id,
+            self.context_provider,
+            allow_legacy_bootstrap=resume and self.bootstrap_legacy_lifecycle,
+        )
         # The portable layer creates and binds a run before any executor can spawn;
         # Scheduler then enters through its verified resume path in both cases.
-        result = scheduler.run(actual_run_id, resume=True)
+        result = scheduler.run(actual_run_id, resume=True, lifecycle_resume=resume)
         if resume:
             self._recover_worktrees(result)
         outputs: dict[str, Any] = {}
@@ -990,12 +1225,15 @@ class PortableRuntime:
                 for receipt in self._check_receipts
                 if receipt.run_id == result.run_id
             )
+        run_context, lifecycle_events = lifecycle.snapshot(result.run_id)
         return OrchestrationResult(
             run=result,
             outputs=outputs,
             agent_receipts=agent_receipts,
             check_receipts=check_receipts,
             worktrees=paths,
+            run_context=run_context,
+            lifecycle_events=lifecycle_events,
         )
 
 
@@ -1006,6 +1244,7 @@ __all__ = [
     "OrchestrationError",
     "OrchestrationResult",
     "PortableRuntime",
+    "RunContextProvider",
     "change_set_from_value",
     "change_set_value",
 ]

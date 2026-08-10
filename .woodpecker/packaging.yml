@@ -5,7 +5,9 @@ steps:
   packaging:
     image: ghcr.io/astral-sh/uv:python3.13-bookworm
     commands:
-      - apt-get update && apt-get install -y --no-install-recommends git
+      - >-
+        apt-get update && apt-get install -y --no-install-recommends
+        bubblewrap git strace util-linux
       - >-
         if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
           git fetch --unshallow --tags origin '+refs/heads/*:refs/remotes/origin/*';

@@ -1,0 +1,60 @@
+{
+  "version": "graph-engineering/v1alpha1",
+  "id": "mobile_automation_vertical_slice",
+  "goal": "Probe one real mobile journey, implement the narrow vertical slice, and require deterministic plus recorded manual proof before acceptance",
+  "budgets": {"max_nodes": 3, "max_concurrency": 2, "max_attempts_per_node": 2, "max_total_attempts": 6, "timeout_seconds": 1800},
+  "nodes": [
+    {
+      "id": "probe_real_journey",
+      "kind": "agent",
+      "task": "Run the existing read-only device/browser probe for one user journey. Return observed states, selectors, timing, and a bounded implementation contract. Do not edit code.",
+      "needs": [],
+      "inputs": {},
+      "outputs": {"experiment": {"schema": {"type": "object", "additionalProperties": false, "required": ["journey", "observations", "contract"], "properties": {"journey": {"type": "string"}, "observations": {"type": "array", "maxItems": 50, "items": {"type": "string"}}, "contract": {"type": "object"}}}}},
+      "profile": "verification",
+      "workspace": "read-only",
+      "permission": "read",
+      "effect": "read",
+      "checks": [{"id": "experiment_receipt", "argv": ["python3", "tools/mobile_slice_gate.py", "--check-experiment"]}],
+      "retry": {"max_attempts": 2, "no_progress_limit": 1},
+      "required": true
+    },
+    {
+      "id": "implement_vertical_slice",
+      "kind": "agent",
+      "task": "Implement only the probed journey contract, including its focused regression. Do not broaden the automation surface.",
+      "needs": ["probe_real_journey"],
+      "inputs": {"experiment": "probe_real_journey.experiment"},
+      "outputs": {
+        "result": {"schema": {"type": "object", "additionalProperties": false, "required": ["summary", "test_ids"], "properties": {"summary": {"type": "string"}, "test_ids": {"type": "array", "items": {"type": "string"}}}}},
+        "changeset": {"schema": {"type": "object", "additionalProperties": false, "required": ["base_sha", "patch_b64", "untracked_b64", "changed_paths", "digest"], "properties": {"base_sha": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"}, "patch_b64": {"type": "string"}, "untracked_b64": {"type": "object", "additionalProperties": {"type": "string"}}, "changed_paths": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}, "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}}
+      },
+      "profile": "implementation",
+      "workspace": "worktree",
+      "write_scope": ["src/mobile", "tests/mobile"],
+      "permission": "write",
+      "effect": "none",
+      "checks": [{"id": "focused_regression", "argv": ["python3", "tools/mobile_slice_gate.py", "--check-focused"]}],
+      "retry": {"max_attempts": 2, "no_progress_limit": 1},
+      "required": true
+    },
+    {
+      "id": "integrate_and_prove",
+      "kind": "integration",
+      "task": "Apply the one accepted slice and require combined deterministic evidence plus a locally recorded manual device proof receipt.",
+      "needs": ["implement_vertical_slice"],
+      "inputs": {"slice": "implement_vertical_slice.changeset"},
+      "outputs": {"result": {"schema": {"type": "object", "additionalProperties": false, "required": ["base_sha", "changed_paths", "change_digests", "integration_digest"], "properties": {"base_sha": {"type": "string"}, "changed_paths": {"type": "array", "items": {"type": "string"}}, "change_digests": {"type": "array", "items": {"type": "string"}}, "integration_digest": {"type": "string"}}}}},
+      "workspace": "worktree",
+      "write_scope": ["src/mobile", "tests/mobile"],
+      "permission": "write",
+      "checks": [
+        {"id": "combined_regression", "argv": ["python3", "tools/mobile_slice_gate.py", "--check-combined"]},
+        {"id": "manual_proof_receipt", "argv": ["python3", "tools/mobile_slice_gate.py", "--require-manual-proof"]}
+      ],
+      "retry": {"max_attempts": 1, "no_progress_limit": 1},
+      "required": true
+    }
+  ],
+  "outputs": {"result": "integrate_and_prove.result"}
+}

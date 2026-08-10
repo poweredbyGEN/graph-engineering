@@ -50,6 +50,33 @@ Use diverse verifier lenses rather than identical votes. A useful code finding m
 line or symbol, failure mechanism, and reproduction/check. Deterministically discard duplicates;
 use a model only for judgments that code cannot make.
 
+## Deterministic quorum
+
+Use an explicit join policy when a consumer can act on a bounded subset of independent
+settlements:
+
+- `all`: wait for every dependency to pass;
+- `all_settled`: wait for every optional dependency to reach a terminal state;
+- `any`: release after the first successful optional dependency;
+- `n_of_m`: release after the declared threshold succeeds;
+- `majority`: release after `floor(m/2)+1` optional dependencies succeed.
+
+For the non-`all` policies, mark producers optional so a losing voter does not contradict the join
+by failing the whole run. Release early only when success is reached or failure is mathematically
+irreversible. Preserve the release snapshot even if remaining workers later settle. A quorum
+join counts successful node settlements; it does not inspect a model's verdict field. If the goal is
+"two reviewers said this is real," wait for the required typed verdict artifacts and count those
+values in deterministic reducer code. Neither form replaces deterministic tests or an integration
+gate.
+
+## Remote A2A worker
+
+Use A2A only when the worker is independently deployed or operated. Pin its Agent Card identity,
+protocol/interface, allowed skill, authorization scheme, and capability digest before dispatch.
+Persist its task ID and poll the same task on resume. Treat its artifact as untrusted input: validate
+the schema and, for code, apply the canonical changeset in a fresh local worktree and rerun local
+checks. Do not expose local MCP registrations, merge authority, or deployment authority to it.
+
 ## Fleet supervision
 
 One orchestrator owns scheduling, integration, and the live-worker ledger. For every node record
@@ -73,10 +100,13 @@ Operate fan-out as a bounded control loop:
 6. Validate schemas, digests, write scope, receipts, and deterministic checks before marking a node
    successful or unlocking consumers. Count every fan-in's expected, received, failed, and missing
    inputs.
-7. Retry only the failed node and descendants invalidated by its changed artifact. Preserve
+7. Append versioned lifecycle facts under the accepted run lease. A trace must explain readiness,
+   retries, join decisions, artifacts, checks, repair, cancellation, and terminal state without
+   relying on a model summary.
+8. Retry only the failed node and descendants invalidated by its changed artifact. Preserve
    unrelated successes and their worktrees. Stop on the configured attempt, no-progress, time, or
    cost ceiling.
-8. Reap finished worker processes after output and receipts are durably captured. Preserve accepted
+9. Reap finished worker processes after output and receipts are durably captured. Preserve accepted
    and failed worktrees according to project policy; process cleanup is not evidence deletion.
 
 The portable runtime owns this loop mechanically. With native subagent tools, maintain the same

@@ -98,6 +98,58 @@ Do not replace failure with `null`. Preserve at least:
 Fan-in must see successful, failed, skipped, and cancelled settlements so it can distinguish a
 complete result from silent loss.
 
+## Output-aware acceptance
+
+An output schema may intentionally admit both successful results and useful partial failure
+evidence. In that case, add a narrower `acceptance_schema` to the output contract. The runtime
+content-addresses every schema-valid output first, then evaluates the acceptance schema. A rejected
+output fails the attempt and cannot release an edge, but its immutable digest remains in the
+structured attempt failure for inspection:
+
+```json
+{
+  "evidence": {
+    "schema": {"type": "object", "required": ["status", "checkpoints"]},
+    "acceptance_schema": {
+      "type": "object",
+      "properties": {"status": {"const": "succeeded"}},
+      "required": ["status"]
+    }
+  }
+}
+```
+
+Use JSON Schema only: this is a bounded deterministic predicate, not an expression language or a
+model verdict. The acceptance schema is also rechecked on resume before a prior success is trusted.
+
+## Typed join
+
+A consumer may declare one deterministic join policy over its `needs`:
+
+```json
+{
+  "id": "adjudicate",
+  "kind": "transform",
+  "task": "Consume the exact majority settlement.",
+  "needs": ["correctness", "security", "reproduction"],
+  "inputs": {},
+  "join": {"policy": "majority"},
+  "outputs": {"verdict": {"schema": {"type": "object"}}},
+  "workspace": "read-only",
+  "permission": "read",
+  "required": true
+}
+```
+
+The three producers must be optional. The runtime supplies their immutable settlement snapshot in
+`ExecutionContext.join`; a quorum consumer cannot bind artifacts from producers that may still be
+running or may fail. `n_of_m` additionally requires `n`. Empty or impossible thresholds and
+required producers under a non-`all` policy are validation errors. The snapshot records policy,
+threshold, expected, received, passed, failed, cancelled, missing, decision, and each dependency's
+state. `majority` means a majority of dependencies completed successfully; it does not count a
+boolean or score inside their output. Semantic voting requires typed verdict artifacts and a
+deterministic reducer after the required evidence has settled.
+
 ## Typed repair edge
 
 A combined integration failure is not permission to retry the graph. Declare a route from exact

@@ -7,6 +7,7 @@ import json
 import threading
 import time
 import uuid
+from collections import deque
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -14,9 +15,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
+from jsonschema import Draft202012Validator
+
 from .artifacts import ArtifactError, ArtifactStore, canonical_json
 from .contracts import validate_workflow
-from .state import RunLease, RunLeaseError, StaleAttemptError, StateStore
+from .state import (
+    ProgressBudgetExpiredError,
+    RunLease,
+    RunLeaseError,
+    StaleAttemptError,
+    StateStore,
+)
 
 
 @dataclass(frozen=True)
@@ -26,7 +35,9 @@ class ExecutionContext:
     attempt: int
     inputs: Mapping[str, Any]
     cancelled: Callable[[], bool]
+    join: Mapping[str, Any] = field(default_factory=dict)
     idempotency_key: str | None = None
+    deadline_at: float | None = None
 
 
 @dataclass(frozen=True)
@@ -75,8 +86,16 @@ class _AttemptResult:
     passed: bool
     digest: str
     error: str | None = None
-    artifacts: Mapping[str, tuple[str, dict[str, Any]]] = field(default_factory=dict)
+    artifacts: Mapping[str, _PendingArtifact] = field(default_factory=dict)
     failure: Mapping[str, Any] | None = None
+    deterministic_check_count: int | None = None
+
+
+@dataclass(frozen=True)
+class _PendingArtifact:
+    digest: str
+    schema: dict[str, Any]
+    value: Any
 
 
 @dataclass(frozen=True)
@@ -187,6 +206,140 @@ class Scheduler:
             inputs[name] = self.artifacts.get(record["digest"], schema).value
         return inputs
 
+    def _join_snapshot(
+        self, node: Mapping[str, Any], rows: Mapping[str, Mapping[str, Any]]
+    ) -> dict[str, Any] | None:
+        """Evaluate a join from persisted node state, never from model judgment."""
+
+        join = node.get("join")
+        if join is None:
+            return None
+        dependency_ids = tuple(node.get("needs", ()))
+        settlements = {
+            dependency: str(rows[dependency]["status"]) for dependency in dependency_ids
+        }
+        terminal = {
+            dependency: status
+            for dependency, status in settlements.items()
+            if status in self.TERMINAL
+        }
+        passed = sum(status == "succeeded" for status in terminal.values())
+        cancelled = sum(status == "cancelled" for status in terminal.values())
+        failed = len(terminal) - passed - cancelled
+        expected = len(dependency_ids)
+        received = len(terminal)
+        missing = expected - received
+        policy = str(join["policy"])
+        if policy == "n_of_m":
+            threshold = int(join["n"])
+        elif policy == "majority":
+            threshold = expected // 2 + 1
+        elif policy == "any":
+            threshold = 1
+        else:
+            threshold = expected
+
+        if policy == "all":
+            required_failure = any(
+                settlements[dependency]
+                in {"failed", "blocked", "cancelled", "uncertain"}
+                or (
+                    settlements[dependency] == "optional_failed"
+                    and bool(rows[dependency]["required"])
+                )
+                for dependency in dependency_ids
+            )
+            accepted = all(
+                status in {"succeeded", "optional_failed"}
+                for status in settlements.values()
+            )
+            decision = (
+                "failed" if required_failure else "succeeded" if accepted else "waiting"
+            )
+        elif policy == "all_settled":
+            decision = "succeeded" if missing == 0 else "waiting"
+        elif passed >= threshold:
+            decision = "succeeded"
+        elif passed + missing < threshold:
+            decision = "failed"
+        else:
+            decision = "waiting"
+
+        return {
+            "policy": policy,
+            "threshold": threshold,
+            "expected": expected,
+            "received": received,
+            "passed": passed,
+            "failed": failed,
+            "cancelled": cancelled,
+            "missing": missing,
+            "decision": decision,
+            "settlements": settlements,
+        }
+
+    def _persist_join_states(
+        self,
+        run_id: str,
+        rows: Mapping[str, Mapping[str, Any]],
+        lease: RunLease,
+    ) -> dict[str, str]:
+        decisions: dict[str, str] = {}
+        for node_id, node in sorted(self.nodes.items()):
+            snapshot = self._join_snapshot(node, rows)
+            if snapshot is None:
+                continue
+            persisted = self.state.record_join_state(run_id, node_id, snapshot, lease)
+            decisions[node_id] = str(persisted["decision"])
+        return decisions
+
+    def _quorum_member_dispatchable(
+        self,
+        node_id: str,
+        rows: Mapping[str, Mapping[str, Any]],
+        active_nodes: set[str],
+        join_decisions: Mapping[str, str],
+    ) -> bool:
+        """Keep reserve voters idle until the active quorum slice proves insufficient."""
+
+        for consumer_id, consumer in self.nodes.items():
+            join = consumer.get("join")
+            if (
+                join is None
+                or join["policy"] not in {"any", "n_of_m", "majority"}
+                or node_id not in consumer.get("needs", ())
+                or rows[consumer_id]["status"] not in {"pending", "running"}
+            ):
+                continue
+            decision = join_decisions.get(consumer_id, "waiting")
+            if decision != "waiting":
+                return False
+            dependencies = sorted(consumer["needs"])
+            threshold = (
+                1
+                if join["policy"] == "any"
+                else int(join["n"])
+                if join["policy"] == "n_of_m"
+                else len(dependencies) // 2 + 1
+            )
+            passed = sum(
+                rows[dependency]["status"] == "succeeded" for dependency in dependencies
+            )
+            active_count = sum(
+                dependency in active_nodes or rows[dependency]["status"] == "running"
+                for dependency in dependencies
+            )
+            capacity = max(0, threshold - passed - active_count)
+            candidates = [
+                dependency
+                for dependency in dependencies
+                if rows[dependency]["status"] == "pending"
+                and dependency not in active_nodes
+            ]
+            if node_id not in candidates[:capacity]:
+                return False
+        return True
+
     def _run_check(
         self,
         check: dict[str, Any],
@@ -195,6 +348,13 @@ class Scheduler:
     ) -> CheckResult:
         assert self.check_runner is not None
         timeout = check.get("timeout_seconds")
+        if context.deadline_at is not None:
+            remaining = context.deadline_at - time.time()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"check {check['id']!r} reached the persisted progress deadline"
+                )
+            timeout = remaining if timeout is None else min(float(timeout), remaining)
         if timeout is None:
             raw = self.check_runner(check, context, outputs)
         else:
@@ -221,6 +381,7 @@ class Scheduler:
         node: dict[str, Any],
         number: int,
         cancel_event: threading.Event,
+        deadline_at: float = float("inf"),
     ) -> _AttemptResult:
         node_id = node["id"]
         try:
@@ -241,9 +402,13 @@ class Scheduler:
                 attempt=number,
                 inputs=self._inputs(run_id, node),
                 cancelled=lambda: (
-                    cancel_event.is_set() or self.state.cancel_requested(run_id)
+                    cancel_event.is_set()
+                    or self.state.cancel_requested(run_id)
+                    or time.time() >= deadline_at
                 ),
+                join=self.state.join_state(run_id, node_id) or {},
                 idempotency_key=self._idempotency_key(run_id, node),
+                deadline_at=deadline_at,
             )
             if context.cancelled():
                 raise RuntimeError("run cancelled")
@@ -258,15 +423,29 @@ class Scheduler:
                     f"output contract mismatch: missing={missing}, extra={extra}"
                 )
 
-            checked: dict[str, tuple[str, dict[str, Any]]] = {}
+            checked: dict[str, _PendingArtifact] = {}
             for output_name, contract in declared.items():
                 schema = contract["schema"]
                 if not isinstance(schema, dict):
                     raise ArtifactError(
                         f"external schema references are not supported: {schema!r}"
                     )
-                artifact = self.artifacts.put(outputs[output_name], schema)
-                checked[output_name] = (artifact.digest, schema)
+                errors = sorted(
+                    Draft202012Validator(schema).iter_errors(outputs[output_name]),
+                    key=lambda error: list(error.path),
+                )
+                if errors:
+                    raise ArtifactError(
+                        f"artifact schema validation failed: {errors[0].message}"
+                    )
+                digest = hashlib.sha256(
+                    canonical_json(outputs[output_name])
+                ).hexdigest()
+                checked[output_name] = _PendingArtifact(
+                    digest=digest,
+                    schema=schema,
+                    value=outputs[output_name],
+                )
 
             evidence: list[dict[str, Any]] = []
             for check in node["checks"]:
@@ -290,21 +469,90 @@ class Scheduler:
                         False,
                         _failure_digest("CHECK_FAILED", detail),
                         f"RuntimeError: {detail}",
+                        artifacts=checked,
                         failure=failure,
+                        deterministic_check_count=len(evidence),
+                    )
+
+            # An output schema defines what can be preserved as evidence. An optional
+            # acceptance schema defines the narrower result that is allowed to advance
+            # the graph. Evaluate it after the declared project checks and only after
+            # every output has been content-addressed, so even a check-green rejected
+            # result remains inspectable without becoming an accepted edge.
+            for output_name, contract in declared.items():
+                acceptance_schema = contract.get("acceptance_schema")
+                if acceptance_schema is None:
+                    continue
+                try:
+                    errors = sorted(
+                        Draft202012Validator(acceptance_schema).iter_errors(
+                            outputs[output_name]
+                        ),
+                        key=lambda error: list(error.path),
+                    )
+                    if errors:
+                        raise ArtifactError(
+                            f"artifact schema validation failed: {errors[0].message}"
+                        )
+                except Exception as exc:  # noqa: BLE001 - preserve typed rejection data
+                    evidence_detail = str(exc)[:2000]
+                    code = (
+                        "OUTPUT_NOT_ACCEPTED"
+                        if isinstance(exc, ArtifactError)
+                        else "OUTPUT_ACCEPTANCE_ERROR"
+                    )
+                    detail = (
+                        f"output {output_name!r} was preserved but not accepted: "
+                        f"{evidence_detail}"
+                    )
+                    failure = {
+                        "code": code,
+                        "output_name": output_name,
+                        "evidence": evidence_detail,
+                        "artifact_receipts": {
+                            name: pending.digest
+                            for name, pending in sorted(checked.items())
+                        },
+                    }
+                    return _AttemptResult(
+                        number,
+                        False,
+                        _failure_digest(code, detail),
+                        f"{type(exc).__name__}: {detail}",
+                        artifacts=checked,
+                        failure=failure,
+                        deterministic_check_count=len(evidence),
                     )
 
             digest = hashlib.sha256(
-                canonical_json({"artifacts": checked, "checks": evidence})
+                canonical_json(
+                    {
+                        "artifacts": {
+                            name: pending.digest
+                            for name, pending in sorted(checked.items())
+                        },
+                        "checks": evidence,
+                    }
+                )
             ).hexdigest()
-            return _AttemptResult(number, True, digest, artifacts=checked)
+            return _AttemptResult(
+                number,
+                True,
+                digest,
+                artifacts=checked,
+                deterministic_check_count=len(evidence),
+            )
         except Exception as exc:  # noqa: BLE001 - executor failures are attempt data
+            code = getattr(exc, "code", type(exc).__name__)
+            if not isinstance(code, str) or not code:
+                code = type(exc).__name__
             detail = f"{type(exc).__name__}: {exc}"
             return _AttemptResult(
                 number,
                 False,
-                _failure_digest(type(exc).__name__, str(exc)),
+                _failure_digest(code, str(exc)),
                 detail,
-                failure={"code": type(exc).__name__, "evidence": str(exc)},
+                failure={"code": code, "evidence": str(exc)},
             )
 
     def _try_repair(
@@ -362,18 +610,27 @@ class Scheduler:
         self, run_id: str, node: dict[str, Any], result: _AttemptResult, lease: RunLease
     ) -> None:
         node_id = node["id"]
+        artifacts: dict[str, tuple[str, dict[str, Any]]] = {}
+        for name, pending in sorted(result.artifacts.items()):
+            artifact = self.artifacts.put(pending.value, pending.schema)
+            if artifact.digest != pending.digest:
+                raise ArtifactError(
+                    f"artifact {name!r} changed between validation and persistence"
+                )
+            artifacts[name] = (artifact.digest, pending.schema)
         if result.passed:
             self.state.succeed_attempt(
                 run_id,
                 node_id,
                 result.number,
                 result.digest,
-                dict(result.artifacts),
+                artifacts,
                 lease,
+                deterministic_check_count=result.deterministic_check_count,
             )
             return
 
-        no_progress = self.state.finish_attempt(
+        no_progress, progress = self.state.finish_attempt(
             run_id,
             node_id,
             result.number,
@@ -382,9 +639,12 @@ class Scheduler:
             result.error,
             lease,
             failure=result.failure,
+            artifacts=artifacts,
+            deterministic_check_count=result.deterministic_check_count,
         )
         if node.get("repair") is not None:
-            self._try_repair(run_id, node, result.failure, result.digest, lease)
+            if progress["decision"] == "continue":
+                self._try_repair(run_id, node, result.failure, result.digest, lease)
             return
         retry = node.get("retry", {})
         max_attempts = min(
@@ -395,7 +655,9 @@ class Scheduler:
         )
         no_progress_limit = retry.get("no_progress_limit", 1)
         retry_available = (
-            result.number < max_attempts and no_progress < no_progress_limit
+            result.number < max_attempts
+            and no_progress < no_progress_limit
+            and progress["decision"] == "continue"
         )
         if retry_available and not self._replay_safe(node):
             self.state.set_node_status(
@@ -433,6 +695,9 @@ class Scheduler:
                             f"external schema references are not supported: {schema!r}"
                         )
                     self.artifacts.get(record["digest"], schema)
+                    acceptance_schema = contract.get("acceptance_schema")
+                    if acceptance_schema is not None:
+                        self.artifacts.get(record["digest"], acceptance_schema)
                 except ArtifactError as exc:
                     self.state.invalidate_node(run_id, node_id, str(exc), lease)
                     valid = False
@@ -463,6 +728,7 @@ class Scheduler:
         *,
         resume: bool = False,
         cancel_event: threading.Event | None = None,
+        lifecycle_resume: bool | None = None,
     ) -> RunResult:
         cancel_event = cancel_event or threading.Event()
         if resume:
@@ -476,7 +742,10 @@ class Scheduler:
             stored = self.state.run(run_id)
 
         lease = self.state.acquire_lease(
-            run_id, token=uuid.uuid4().hex, ttl_seconds=self.lease_ttl_seconds
+            run_id,
+            token=uuid.uuid4().hex,
+            ttl_seconds=self.lease_ttl_seconds,
+            lifecycle_resume=resume if lifecycle_resume is None else lifecycle_resume,
         )
         budgets = self.workflow["budgets"]
         # A resume continues the original workflow budget; it must not mint a fresh
@@ -491,6 +760,58 @@ class Scheduler:
         workflow_deadline = time.monotonic() + remaining_seconds
         renew_at = time.monotonic() + self.lease_ttl_seconds / 3
         active: dict[Future[_AttemptResult], _ActiveAttempt] = {}
+        completion = threading.Event()
+        completed: deque[Future[_AttemptResult]] = deque()
+        completion_lock = threading.Lock()
+
+        def mark_completed(future: Future[_AttemptResult]) -> None:
+            with completion_lock:
+                completed.append(future)
+            completion.set()
+
+        def launch(node_id: str, node: dict[str, Any]) -> bool:
+            if not self.state.admit_attempt(run_id, node_id, lease, resumed=resume):
+                return False
+            try:
+                number = self.state.start_attempt(run_id, node_id, lease)
+            except ProgressBudgetExpiredError:
+                return False
+            timeout = node.get("timeout_seconds", budgets["timeout_seconds"])
+            progress_deadline_at = self.state.progress_deadline(run_id, node_id)
+            if progress_deadline_at is None:
+                raise RuntimeError(f"progress deadline for {node_id!r} was not started")
+            progress_remaining = max(0.0, progress_deadline_at - time.time())
+            deadline = min(
+                workflow_deadline,
+                time.monotonic() + float(timeout),
+                time.monotonic() + progress_remaining,
+            )
+            future = _daemon_future(
+                lambda n=node, num=number, boundary=progress_deadline_at: self._attempt(
+                    run_id, n, num, cancel_event, boundary
+                ),
+                name=f"graph-node-{node_id}-{number}",
+            )
+            future.add_done_callback(mark_completed)
+            active[future] = _ActiveAttempt(node_id, number, deadline)
+            return True
+
+        def timeout_result(entry: _ActiveAttempt) -> _AttemptResult:
+            detail = (
+                "node exceeded its effective execution deadline (including the "
+                "persisted progress budget); result fenced; executor adapter must "
+                "terminate its process tree"
+            )
+            return _AttemptResult(
+                entry.number,
+                False,
+                _failure_digest("PROGRESS_DEADLINE_EXCEEDED", detail),
+                f"TimeoutError: {detail}",
+                failure={
+                    "code": "PROGRESS_DEADLINE_EXCEEDED",
+                    "evidence": detail,
+                },
+            )
 
         try:
             if not self._validate_accepted(
@@ -534,6 +855,9 @@ class Scheduler:
                         )
                     active.clear()
                     self.state.finish_run(run_id, "cancelled", lease)
+                    self._persist_join_states(
+                        run_id, self.state.node_rows(run_id), lease
+                    )
                     return RunResult(run_id, "cancelled", self.state.node_rows(run_id))
                 for node_id, node in sorted(self.nodes.items()):
                     if rows[node_id]["status"] != "failed" or not node.get("repair"):
@@ -544,8 +868,59 @@ class Scheduler:
                         self._try_repair(run_id, node, failure, digest, lease)
                 rows = self.state.node_rows(run_id)
 
+                # Keep unused quorum members as reserves while the decision is unknown. Once
+                # the threshold becomes terminal, claim those members before freezing the
+                # snapshot so the audit record distinguishes running work from never-dispatched
+                # work, then release the consumer without waiting for them.
+                attempts = sum(row["attempt_count"] for row in rows.values())
+                slots = budgets["max_concurrency"] - len(active)
+                active_nodes = {entry.node_id for entry in active.values()}
+                reserves_started = False
+                for consumer in self.nodes.values():
+                    join = consumer.get("join")
+                    if join is None or join["policy"] not in {
+                        "any",
+                        "n_of_m",
+                        "majority",
+                    }:
+                        continue
+                    snapshot = self._join_snapshot(consumer, rows)
+                    if snapshot is None or snapshot["decision"] == "waiting":
+                        continue
+                    for dependency in sorted(consumer["needs"]):
+                        if slots <= 0 or attempts >= budgets["max_total_attempts"]:
+                            break
+                        if (
+                            rows[dependency]["status"] != "pending"
+                            or dependency in active_nodes
+                        ):
+                            continue
+                        if not launch(dependency, self.nodes[dependency]):
+                            continue
+                        active_nodes.add(dependency)
+                        attempts += 1
+                        slots -= 1
+                        reserves_started = True
+                if reserves_started:
+                    rows = self.state.node_rows(run_id)
+
+                join_decisions = self._persist_join_states(run_id, rows, lease)
+
                 for node_id, node in sorted(self.nodes.items()):
                     if rows[node_id]["status"] != "pending":
+                        continue
+                    if node.get("join") is not None:
+                        if join_decisions[node_id] == "failed":
+                            snapshot = self.state.join_state(run_id, node_id)
+                            self.state.set_node_status(
+                                run_id,
+                                node_id,
+                                "blocked",
+                                "join quorum became impossible: "
+                                f"passed={snapshot['passed']} missing={snapshot['missing']} "
+                                f"threshold={snapshot['threshold']}",
+                                lease,
+                            )
                         continue
                     dependencies = [
                         rows[dependency] for dependency in node.get("needs", [])
@@ -576,42 +951,54 @@ class Scheduler:
                             or node_id in active_nodes
                         ):
                             continue
+                        if not self._quorum_member_dispatchable(
+                            node_id, rows, active_nodes, join_decisions
+                        ):
+                            continue
                         dependency_statuses = [
                             rows[dependency]["status"]
                             for dependency in node.get("needs", [])
                         ]
-                        if not all(
+                        if node.get("join") is not None:
+                            if join_decisions.get(node_id) != "succeeded":
+                                continue
+                        elif not all(
                             status in {"succeeded", "optional_failed"}
                             for status in dependency_statuses
                         ):
                             continue
-                        number = self.state.start_attempt(run_id, node_id, lease)
-                        timeout = node.get(
-                            "timeout_seconds", budgets["timeout_seconds"]
-                        )
-                        deadline = min(workflow_deadline, time.monotonic() + timeout)
-                        future = _daemon_future(
-                            lambda n=node, num=number: self._attempt(
-                                run_id, n, num, cancel_event
-                            ),
-                            name=f"graph-node-{node_id}-{number}",
-                        )
-                        active[future] = _ActiveAttempt(node_id, number, deadline)
+                        if not launch(node_id, node):
+                            continue
+                        active_nodes.add(node_id)
                         attempts += 1
                         slots -= 1
+                        # A completed worker changes the ready frontier. Recompute before
+                        # launching more siblings so fast quorum evidence is not hidden behind
+                        # unrelated optional work.
+                        if completion.is_set():
+                            break
 
                 progressed = False
-                for future, entry in list(active.items()):
-                    if not future.done():
-                        continue
-                    active.pop(future)
-                    try:
-                        self._finalize_attempt(
-                            run_id, self.nodes[entry.node_id], future.result(), lease
-                        )
-                    except StaleAttemptError:
-                        pass
-                    progressed = True
+                with completion_lock:
+                    future = completed.popleft() if completed else None
+                if future is not None:
+                    entry = active.pop(future, None)
+                    if entry is not None:
+                        try:
+                            completed_result = (
+                                timeout_result(entry)
+                                if time.monotonic() >= entry.deadline
+                                else future.result()
+                            )
+                            self._finalize_attempt(
+                                run_id,
+                                self.nodes[entry.node_id],
+                                completed_result,
+                                lease,
+                            )
+                        except StaleAttemptError:
+                            pass
+                        progressed = True
 
                 now = time.monotonic()
                 for future, entry in list(active.items()):
@@ -619,32 +1006,35 @@ class Scheduler:
                         continue
                     active.pop(future)
                     future.add_done_callback(lambda completed: completed.exception())
-                    timeout = self.nodes[entry.node_id].get(
-                        "timeout_seconds", budgets["timeout_seconds"]
-                    )
-                    detail = (
-                        f"node exceeded {timeout}s; result fenced; executor adapter must terminate "
-                        "its process tree"
-                    )
-                    result = _AttemptResult(
-                        entry.number,
-                        False,
-                        _failure_digest("TimeoutError", detail),
-                        f"TimeoutError: {detail}",
-                    )
                     self._finalize_attempt(
-                        run_id, self.nodes[entry.node_id], result, lease
+                        run_id,
+                        self.nodes[entry.node_id],
+                        timeout_result(entry),
+                        lease,
                     )
                     progressed = True
 
                 if active:
                     if not progressed:
-                        time.sleep(0.01)
+                        next_deadline = min(entry.deadline for entry in active.values())
+                        # The caller-owned cancellation Event cannot notify this condition;
+                        # retain a small bounded cancellation probe without polling the ready
+                        # frontier itself.
+                        wake_at = min(
+                            next_deadline,
+                            workflow_deadline,
+                            renew_at,
+                            time.monotonic() + 0.05,
+                        )
+                        completion.wait(max(0.0, wake_at - time.monotonic()))
+                        completion.clear()
                     continue
                 if progressed:
-                    continue
-
-                rows = self.state.node_rows(run_id)
+                    rows = self.state.node_rows(run_id)
+                    if not all(row["status"] in self.TERMINAL for row in rows.values()):
+                        continue
+                else:
+                    rows = self.state.node_rows(run_id)
                 if all(row["status"] in self.TERMINAL for row in rows.values()):
                     if any(row["status"] == "uncertain" for row in rows.values()):
                         self.state.finish_run(run_id, "needs_reconciliation", lease)

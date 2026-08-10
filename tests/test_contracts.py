@@ -7,6 +7,12 @@ from pathlib import Path
 import pytest
 
 from graph_engineering.contracts import (
+    _SCHEMA_ARRAY_KEYWORDS,
+    _SCHEMA_MAP_KEYWORDS,
+    _SCHEMA_SINGLE_KEYWORDS,
+    MAX_SCHEMA_BYTES,
+    MAX_SCHEMA_DEPTH,
+    MAX_SCHEMA_NODES,
     WorkflowValidationError,
     load_workflow,
     validate_workflow,
@@ -99,6 +105,298 @@ def repair_workflow() -> dict:
 
 def test_valid_workflow_passes():
     validate_workflow(workflow())
+
+
+def _nested_schema(depth: int) -> dict:
+    root: dict = {}
+    current = root
+    for _ in range(depth):
+        child: dict = {}
+        current["items"] = child
+        current = child
+    return root
+
+
+OFFICIAL_2020_12_SCHEMA_MAP_KEYWORDS = {
+    "$defs",
+    "properties",
+    "patternProperties",
+    "dependentSchemas",
+}
+OFFICIAL_2020_12_SCHEMA_SINGLE_KEYWORDS = {
+    "additionalProperties",
+    "unevaluatedProperties",
+    "propertyNames",
+    "contains",
+    "items",
+    "unevaluatedItems",
+    "not",
+    "if",
+    "then",
+    "else",
+    "contentSchema",
+}
+OFFICIAL_2020_12_SCHEMA_ARRAY_KEYWORDS = {
+    "allOf",
+    "anyOf",
+    "oneOf",
+    "prefixItems",
+}
+SUPPORTED_SCHEMA_KEYWORDS = sorted(
+    OFFICIAL_2020_12_SCHEMA_MAP_KEYWORDS
+    | {"definitions"}
+    | OFFICIAL_2020_12_SCHEMA_SINGLE_KEYWORDS
+    | OFFICIAL_2020_12_SCHEMA_ARRAY_KEYWORDS
+)
+
+
+def _at_schema_keyword(keyword: str, child: dict) -> tuple[dict, str]:
+    if keyword in _SCHEMA_MAP_KEYWORDS:
+        return {keyword: {"slot": child}}, f"#/{keyword}/slot"
+    if keyword in _SCHEMA_SINGLE_KEYWORDS:
+        return {keyword: child}, f"#/{keyword}"
+    if keyword in _SCHEMA_ARRAY_KEYWORDS:
+        return {keyword: [child]}, f"#/{keyword}/0"
+    raise AssertionError(f"unknown schema-valued keyword: {keyword}")
+
+
+def test_schema_location_vocabulary_matches_draft_2020_12():
+    # intent: adding a schema-valued vocabulary keyword without policy traversal
+    # reopens external refs, recursive refs, and resource-limit bypasses.
+    assert _SCHEMA_MAP_KEYWORDS == (
+        OFFICIAL_2020_12_SCHEMA_MAP_KEYWORDS | {"definitions"}
+    )
+    assert _SCHEMA_SINGLE_KEYWORDS == OFFICIAL_2020_12_SCHEMA_SINGLE_KEYWORDS
+    assert _SCHEMA_ARRAY_KEYWORDS == OFFICIAL_2020_12_SCHEMA_ARRAY_KEYWORDS
+
+
+@pytest.mark.parametrize("keyword", SUPPORTED_SCHEMA_KEYWORDS)
+@pytest.mark.parametrize(
+    ("reference", "expected"),
+    [
+        ("https://example.invalid/hidden.json", "SCHEMA_EXTERNAL_REFERENCE"),
+        ("#/$defs/missing", "SCHEMA_UNRESOLVED_REFERENCE"),
+    ],
+)
+def test_every_schema_location_enforces_reference_policy(keyword, reference, expected):
+    # intent: a hostile ref cannot hide under any schema-valued Draft 2020-12 keyword.
+    value = workflow()
+    schema, _ = _at_schema_keyword(keyword, {"$ref": reference})
+    value["nodes"][0]["outputs"]["contract"]["schema"] = schema
+
+    with pytest.raises(WorkflowValidationError) as caught:
+        validate_workflow(value)
+
+    assert codes(caught.value) == {expected}
+
+
+@pytest.mark.parametrize("keyword", SUPPORTED_SCHEMA_KEYWORDS)
+def test_every_schema_location_enforces_local_reference_cycles(keyword):
+    value = workflow()
+    schema, pointer = _at_schema_keyword(keyword, {})
+    if keyword in _SCHEMA_MAP_KEYWORDS:
+        schema[keyword]["slot"]["$ref"] = pointer
+    elif keyword in _SCHEMA_SINGLE_KEYWORDS:
+        schema[keyword]["$ref"] = pointer
+    else:
+        schema[keyword][0]["$ref"] = pointer
+    value["nodes"][0]["outputs"]["contract"]["schema"] = schema
+
+    with pytest.raises(WorkflowValidationError) as caught:
+        validate_workflow(value)
+
+    assert codes(caught.value) == {"SCHEMA_REFERENCE_CYCLE"}
+
+
+@pytest.mark.parametrize("keyword", SUPPORTED_SCHEMA_KEYWORDS)
+@pytest.mark.parametrize(
+    ("child", "expected"),
+    [
+        (_nested_schema(MAX_SCHEMA_DEPTH + 1), "SCHEMA_DEPTH_EXCEEDED"),
+        (
+            {"enum": list(range(MAX_SCHEMA_NODES + 1))},
+            "SCHEMA_NODE_LIMIT_EXCEEDED",
+        ),
+    ],
+)
+def test_every_schema_location_enforces_resource_bounds(keyword, child, expected):
+    value = workflow()
+    schema, _ = _at_schema_keyword(keyword, child)
+    value["nodes"][0]["outputs"]["contract"]["schema"] = schema
+
+    with pytest.raises(WorkflowValidationError) as caught:
+        validate_workflow(value)
+
+    assert codes(caught.value) == {expected}
+
+
+@pytest.mark.parametrize("contract_key", ["schema", "acceptance_schema"])
+def test_unevaluated_items_external_ref_repro_fails_closed(contract_key):
+    value = workflow()
+    value["nodes"][0]["outputs"]["contract"][contract_key] = {
+        "type": "array",
+        "unevaluatedItems": {"$ref": "https://example.invalid/hidden.json"},
+    }
+
+    with pytest.raises(WorkflowValidationError) as caught:
+        validate_workflow(value)
+
+    assert [issue.code for issue in caught.value.issues] == [
+        "SCHEMA_EXTERNAL_REFERENCE"
+    ]
+    assert caught.value.issues[0].path.endswith(
+        f".{contract_key}.unevaluatedItems.$ref"
+    )
+
+
+@pytest.mark.parametrize("contract_key", ["schema", "acceptance_schema"])
+def test_schema_depth_is_bounded_before_jsonschema_recurses(contract_key):
+    # intent: hostile schemas must become a stable contract error, never RecursionError.
+    value = workflow()
+    value["nodes"][0]["outputs"]["contract"][contract_key] = _nested_schema(2_000)
+
+    with pytest.raises(WorkflowValidationError) as caught:
+        validate_workflow(value)
+
+    assert codes(caught.value) == {"SCHEMA_DEPTH_EXCEEDED"}
+
+
+def test_schema_width_and_bytes_have_independent_bounds():
+    wide = workflow()
+    wide["nodes"][0]["outputs"]["contract"]["schema"] = {
+        "enum": list(range(MAX_SCHEMA_NODES + 1))
+    }
+    with pytest.raises(WorkflowValidationError) as caught:
+        validate_workflow(wide)
+    assert codes(caught.value) == {"SCHEMA_NODE_LIMIT_EXCEEDED"}
+
+    oversized = workflow()
+    oversized["nodes"][0]["outputs"]["contract"]["schema"] = {
+        "description": "x" * (MAX_SCHEMA_BYTES + 1)
+    }
+    with pytest.raises(WorkflowValidationError) as caught:
+        validate_workflow(oversized)
+    assert codes(caught.value) == {"SCHEMA_BYTES_EXCEEDED"}
+
+
+@pytest.mark.parametrize(
+    ("schema", "expected"),
+    [
+        ({"$ref": "https://example.invalid/schema.json"}, "SCHEMA_EXTERNAL_REFERENCE"),
+        ({"$ref": "other-schema.json"}, "SCHEMA_EXTERNAL_REFERENCE"),
+        ({"$ref": "#/$defs/missing"}, "SCHEMA_UNRESOLVED_REFERENCE"),
+        ({"$ref": "#"}, "SCHEMA_REFERENCE_CYCLE"),
+        (
+            {
+                "$defs": {"a": {"$ref": "#/$defs/b"}, "b": {"$ref": "#/$defs/a"}},
+                "$ref": "#/$defs/a",
+            },
+            "SCHEMA_REFERENCE_CYCLE",
+        ),
+        ({"$dynamicRef": "#node"}, "SCHEMA_RESOURCE_UNSUPPORTED"),
+    ],
+)
+def test_schema_references_are_local_resolved_and_non_recursive(schema, expected):
+    # intent: validation must never perform network I/O or accept recursive expansion.
+    value = workflow()
+    value["nodes"][0]["outputs"]["contract"]["schema"] = schema
+    with pytest.raises(WorkflowValidationError) as caught:
+        validate_workflow(value)
+    assert codes(caught.value) == {expected}
+
+
+def test_bounded_local_json_pointer_schema_remains_supported():
+    value = workflow()
+    value["nodes"][0]["outputs"]["contract"]["schema"] = {
+        "type": "object",
+        "properties": {"value": {"$ref": "#/$defs/value"}},
+        "$defs": {"value": {"type": "integer"}},
+    }
+    validate_workflow(value)
+
+
+def test_ref_shaped_instance_data_is_not_treated_as_schema_control_flow():
+    # intent: resource controls inspect schema positions, not arbitrary const payloads.
+    value = workflow()
+    value["nodes"][0]["outputs"]["contract"]["schema"] = {
+        "const": {"$ref": "https://example.invalid/literal", "$id": "literal"}
+    }
+    validate_workflow(value)
+
+
+def test_in_memory_schema_cycle_is_rejected_without_recursion():
+    value = workflow()
+    schema: dict = {"type": "object"}
+    schema["properties"] = {"again": schema}
+    value["nodes"][0]["outputs"]["contract"]["schema"] = schema
+    with pytest.raises(WorkflowValidationError) as caught:
+        validate_workflow(value)
+    assert codes(caught.value) == {"SCHEMA_OBJECT_CYCLE"}
+
+
+def test_invalid_base_output_schema_is_rejected_at_preflight():
+    # intent: output schemas receive the same meta-schema gate as acceptance schemas.
+    value = workflow()
+    value["nodes"][0]["outputs"]["contract"]["schema"] = {"type": "not-a-type"}
+    with pytest.raises(WorkflowValidationError) as caught:
+        validate_workflow(value)
+    assert "INVALID_OUTPUT_SCHEMA" in codes(caught.value)
+
+
+def test_join_contract_validates_threshold_and_safe_artifact_flow():
+    value = workflow()
+    peer = copy.deepcopy(value["nodes"][1])
+    peer["id"] = "api_peer"
+    peer["required"] = False
+    value["nodes"][1]["required"] = False
+    value["nodes"].insert(2, peer)
+    integration = value["nodes"][3]
+    integration["needs"] = ["api", "api_peer"]
+    integration["inputs"] = {}
+    integration["join"] = {"policy": "n_of_m", "n": 2}
+    validate_workflow(value)
+
+    integration["join"]["n"] = 3
+    with pytest.raises(WorkflowValidationError) as caught:
+        validate_workflow(value)
+    assert "IMPOSSIBLE_JOIN_THRESHOLD" in codes(caught.value)
+
+
+@pytest.mark.parametrize("policy", ["any", "n_of_m", "majority", "all_settled"])
+def test_non_all_join_rejects_required_members(policy):
+    # intent: a required failed voter would defeat an otherwise successful quorum.
+    value = workflow()
+    integration = value["nodes"][2]
+    integration["inputs"] = {}
+    integration["join"] = {"policy": policy}
+    if policy == "n_of_m":
+        integration["join"]["n"] = 1
+    with pytest.raises(WorkflowValidationError) as caught:
+        validate_workflow(value)
+    assert "REQUIRED_QUORUM_MEMBER" in codes(caught.value)
+
+
+def test_all_join_retains_required_dependency_semantics():
+    value = workflow()
+    value["nodes"][2]["join"] = {"policy": "all"}
+    validate_workflow(value)
+
+
+def test_join_that_can_release_without_a_producer_rejects_static_input():
+    # intent: a quorum consumer must use settlement state, not assume every artifact exists.
+    value = workflow()
+    value["nodes"][2]["join"] = {"policy": "any"}
+    with pytest.raises(WorkflowValidationError) as caught:
+        validate_workflow(value)
+    assert "UNSAFE_JOIN_INPUT" in codes(caught.value)
+
+
+def test_join_requires_a_real_dependency_set():
+    value = workflow()
+    value["nodes"][0]["join"] = {"policy": "majority"}
+    with pytest.raises(WorkflowValidationError) as caught:
+        validate_workflow(value)
+    assert "EMPTY_JOIN" in codes(caught.value)
 
 
 def test_explicit_bounded_repair_route_passes():

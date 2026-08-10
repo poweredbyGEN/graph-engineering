@@ -202,7 +202,9 @@ env_allowlist = ["AGENT_API_KEY"]
     )
     local = write(
         tmp_path / ".graph-engineering.local.toml",
-        'version = 1\n[profiles.alpha]\nmodel = "local-model"\n',
+        'version = 1\n[profiles.alpha]\nmodel = "local-model"\n'
+        '[execution]\nallowed_hosts = ["private-host"]\n'
+        f'allowed_checkout_roots = ["{tmp_path}"]\n',
     )
     parsed = load_agent_config(
         user_path=user, project_path=project, project_local_path=local

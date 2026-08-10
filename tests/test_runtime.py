@@ -8,6 +8,7 @@ import pytest
 
 from graph_engineering import CheckResult, Scheduler
 from graph_engineering.contracts import WorkflowValidationError
+from graph_engineering.lifecycle import LifecycleStore, StaticRunContextProvider
 
 SCHEMA = {
     "type": "object",
@@ -23,6 +24,7 @@ def node(
     inputs: dict[str, str] | None = None,
     required: bool = True,
     checks: bool = True,
+    join: dict | None = None,
 ) -> dict:
     value = {
         "id": node_id,
@@ -38,6 +40,8 @@ def node(
     }
     if checks:
         value["checks"] = [{"id": "accept", "argv": ["test", node_id]}]
+    if join is not None:
+        value["join"] = join
     return value
 
 
@@ -171,7 +175,12 @@ def test_ready_queue_overlaps_independent_nodes_and_orders_consumer(tmp_path):
         [
             node("a"),
             node("b"),
-            node("join", needs=["a", "b"], inputs={"a": "a.result", "b": "b.result"}),
+            node(
+                "join",
+                needs=["a", "b"],
+                inputs={"a": "a.result", "b": "b.result"},
+                join={"policy": "all"},
+            ),
         ],
         concurrency=2,
     )
@@ -179,6 +188,254 @@ def test_ready_queue_overlaps_independent_nodes_and_orders_consumer(tmp_path):
     assert result.status == "succeeded"
     assert max(times["a_start"], times["b_start"]) < min(times["a_end"], times["b_end"])
     assert times["join_start"] >= max(times["a_end"], times["b_end"])
+
+
+@pytest.mark.parametrize(
+    ("join", "passing", "expected_threshold"),
+    [
+        ({"policy": "any"}, {"a"}, 1),
+        ({"policy": "n_of_m", "n": 2}, {"a", "b"}, 2),
+        ({"policy": "majority"}, {"a", "b"}, 2),
+    ],
+)
+def test_quorum_join_contains_partial_failure_and_persists_settlement(
+    tmp_path, join, passing, expected_threshold
+):
+    members = [node(name, required=False) for name in ("a", "b", "c")]
+    consumer = node("join", needs=["a", "b", "c"], join=join)
+    seen = []
+
+    def member(context):
+        if context.node_id not in passing:
+            raise RuntimeError("negative vote")
+        return {"result": {"value": 1}}
+
+    def consume(context):
+        seen.append(context.join)
+        return {"result": {"value": context.join["passed"]}}
+
+    engine = scheduler(
+        tmp_path,
+        workflow([*members, consumer]),
+        {"a": member, "b": member, "c": member, "join": consume},
+    )
+    result = engine.run(run_id=f"join-{join['policy']}")
+
+    assert result.status == "succeeded"
+    assert result.nodes["join"]["status"] == "succeeded"
+    assert seen[0]["decision"] == "succeeded"
+    assert seen[0]["threshold"] == expected_threshold
+    persisted = engine.state.join_state(result.run_id, "join")
+    assert persisted is not None
+    assert persisted["expected"] == 3
+    assert persisted["decision"] == "succeeded"
+    assert persisted["passed"] >= expected_threshold
+    assert persisted["received"] == (
+        persisted["passed"] + persisted["failed"] + persisted["cancelled"]
+    )
+    assert persisted["cancelled"] == 0
+    assert persisted["missing"] == persisted["expected"] - persisted["received"]
+    for key in (
+        "policy",
+        "threshold",
+        "expected",
+        "received",
+        "passed",
+        "failed",
+        "cancelled",
+        "missing",
+        "decision",
+        "settlements",
+    ):
+        assert persisted[key] == seen[0][key]
+
+
+def test_majority_releases_downstream_before_slow_member_settles(tmp_path):
+    times: dict[str, float] = {}
+
+    def member(context):
+        if context.node_id == "slow":
+            time.sleep(0.2)
+            times["slow_end"] = time.monotonic()
+        return {"result": {"value": 1}}
+
+    def consume(context):
+        times["join_start"] = time.monotonic()
+        assert context.join["missing"] == 1
+        return {"result": {"value": 2}}
+
+    value = workflow(
+        [
+            node("fast_a", required=False),
+            node("fast_b", required=False),
+            node("slow", required=False),
+            node(
+                "join",
+                needs=["fast_a", "fast_b", "slow"],
+                join={"policy": "majority"},
+            ),
+        ],
+        concurrency=4,
+    )
+    engine = scheduler(
+        tmp_path,
+        value,
+        {
+            "fast_a": member,
+            "fast_b": member,
+            "slow": member,
+            "join": consume,
+        },
+    )
+    result = engine.run()
+
+    assert result.status == "succeeded"
+    assert times["join_start"] < times["slow_end"]
+    persisted = engine.state.join_state(result.run_id, "join")
+    assert persisted is not None
+    assert persisted["decision"] == "succeeded"
+    assert persisted["received"] == 2
+    assert persisted["missing"] == 1
+    assert persisted["settlements"]["slow"] == "running"
+
+
+def test_scheduler_journals_frozen_quorum_release_once_across_resume(tmp_path):
+    # intent: production scheduling exposes the exact early-release decision durably, without replay duplicates.
+    def member(context):
+        if context.node_id == "slow":
+            time.sleep(0.2)
+        return {"result": {"value": 1}}
+
+    value = workflow(
+        [
+            node("fast_a", required=False),
+            node("fast_b", required=False),
+            node("slow", required=False),
+            node(
+                "join",
+                needs=["fast_a", "fast_b", "slow"],
+                join={"policy": "majority"},
+            ),
+        ],
+        concurrency=4,
+    )
+    engine = scheduler(
+        tmp_path,
+        value,
+        {
+            "fast_a": member,
+            "fast_b": member,
+            "slow": member,
+            "join": lambda context: {"result": {"value": context.join["passed"]}},
+        },
+    )
+    run_id = engine.state.create_run(value, "join-lifecycle", lifecycle=True)
+    ledger = LifecycleStore(engine.state.path)
+    ledger.initialize_context(run_id, StaticRunContextProvider({"base_sha": "abc"}))
+
+    result = engine.run(run_id, resume=True, lifecycle_resume=False)
+    assert result.status == "succeeded"
+    frozen = engine.state.join_state(run_id, "join")
+    assert frozen is not None
+    assert frozen["decision"] == "succeeded"
+    assert frozen["missing"] == 1
+
+    resumed = engine.run(run_id, resume=True, lifecycle_resume=False)
+    assert resumed.status == "succeeded"
+    events = [
+        event for event in ledger.events(run_id) if event.event_type == "join.decided"
+    ]
+    assert len(events) == 1
+    assert events[0].payload["decision"] == frozen["decision"]
+    assert events[0].payload["missing"] == frozen["missing"]
+    assert dict(events[0].payload["settlements"]) == frozen["settlements"]
+
+
+def test_impossible_quorum_blocks_consumer_without_calling_it(tmp_path):
+    called = False
+
+    def fail(_context):
+        raise RuntimeError("refuted")
+
+    def consume(_context):
+        nonlocal called
+        called = True
+        return {"result": {"value": 1}}
+
+    def slow_success(_context):
+        time.sleep(0.2)
+        return {"result": {"value": 1}}
+
+    rejected = [node("a", required=False), node("b", required=False)]
+    for member in rejected:
+        member["retry"] = {"max_attempts": 1, "no_progress_limit": 1}
+    value = workflow(
+        [
+            *rejected,
+            node("c", required=False),
+            node(
+                "join",
+                needs=["a", "b", "c"],
+                join={"policy": "n_of_m", "n": 2},
+            ),
+        ]
+    )
+    engine = scheduler(
+        tmp_path,
+        value,
+        {
+            "a": fail,
+            "b": fail,
+            "c": slow_success,
+            "join": consume,
+        },
+    )
+    result = engine.run()
+
+    assert result.status == "failed"
+    assert result.nodes["join"]["status"] == "blocked"
+    assert "became impossible" in result.nodes["join"]["error"]
+    assert not called
+    persisted = engine.state.join_state(result.run_id, "join")
+    assert persisted["decision"] == "failed"
+    assert persisted["received"] == 2
+    assert persisted["missing"] == 1
+    assert persisted["settlements"]["c"] == "running"
+
+
+def test_all_settled_waits_for_every_outcome_but_does_not_require_success(tmp_path):
+    seen = []
+
+    def consume(context):
+        seen.append(context.join)
+        return {"result": {"value": context.join["received"]}}
+
+    value = workflow(
+        [
+            node("pass", required=False),
+            node("fail", required=False),
+            node(
+                "join",
+                needs=["pass", "fail"],
+                join={"policy": "all_settled"},
+            ),
+        ]
+    )
+    result = scheduler(
+        tmp_path,
+        value,
+        {
+            "pass": lambda _: {"result": {"value": 1}},
+            "fail": lambda _: (_ for _ in ()).throw(RuntimeError("no vote")),
+            "join": consume,
+        },
+    ).run()
+
+    assert result.status == "succeeded"
+    assert seen[0]["received"] == 2
+    assert seen[0]["passed"] == 1
+    assert seen[0]["failed"] == 1
+    assert seen[0]["missing"] == 0
 
 
 def test_invalid_artifact_fails_producer_and_blocks_consumer(tmp_path):

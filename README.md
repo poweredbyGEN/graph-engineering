@@ -75,15 +75,37 @@ own traces and see how many of your checks have never caught anything.
 
 The alpha Python package contains validated workflow contracts, a ready-queue scheduler, durable
 SQLite run state, immutable artifact receipts, fenced worktree change transfer, worker profile
-selection, subprocess adapters, and an MCP task coordination server. The deliberately thin
+selection, local subprocess adapters, an optional A2A remote-worker adapter, and an MCP task
+coordination server. The deliberately thin
 [`graph-engineer` CLI](docs/CLI.md) exposes only the deterministic operations justified by project
-pilots: validate, doctor, plan, run/resume, and status. It is not a graph editor or a second
+pilots: assess/init, validate, doctor, plan, run/resume/handoff, status, and trace. It is not a graph editor or a second
 orchestration framework. The `graph-engineering` skill remains the portable playbook for drawing
 and executing graphs through host-native orchestration.
 
 Lanes declare `produces`/`consumes`, so the **fake edge test** — *does A's output actually
 flow into B?* — is computed rather than argued. Correlated outcomes are only a hint; two
 lanes hitting one flaky check correlate perfectly with no dependency at all.
+
+### MCP, A2A, and the graph runtime
+
+| Layer | Responsibility |
+|---|---|
+| Graph runtime | Owns control flow, budgets, readiness, persistence, evidence, repair, and integration. |
+| MCP | Gives a worker bounded tools, data, resources, or a durable task capability. |
+| A2A | Delegates one typed node to an independently operated remote agent. |
+
+The layers do not replace each other. A2A is optional perimeter transport, never the scheduler;
+MCP access never grants node acceptance; remote output still passes local schemas, worktree scope,
+checks, and integration. See [A2A remote workers](docs/A2A.md).
+
+This is narrower than LangGraph or Google ADK: those are general agent-application orchestration
+runtimes, while this project bakes in software-development invariants such as isolated git writes,
+canonical changesets, exact-base resume, deterministic project gates, evidence receipts, and a
+single integration owner. Their useful patterns still transfer: mix deterministic and model nodes,
+initialize run context once, fan out independent specialists, use explicit joins and routes, and
+persist an observable lifecycle. See the official [LangGraph overview](https://docs.langchain.com/oss/python/langgraph/overview),
+[Google ADK graph documentation](https://adk.dev/graphs/), and
+[Agentic Space Quest codelab](https://codelabs.developers.google.com/way-back-home-level-1/instructions).
 
 ### Ops
 
@@ -170,6 +192,21 @@ uv tool install \
 graph-engineer --version
 ```
 
+Inspect what the installed runtime actually implements before wiring it into a project:
+
+```bash
+graph-engineer capabilities --json
+graph-engineer doctor --repo "$PWD" --json
+# Explicitly opt in to a bounded real-worker launch only when desired:
+graph-engineer doctor --repo "$PWD" --profile codex --smoke --timeout 30 --json
+```
+
+`capabilities` is generated from code and packaged schemas. Default `doctor` remains static and
+non-spending; `--smoke` uses an empty isolated repository, strict structured output, reduced
+environment, no MCP, bounded time/output, and redacted digest-only receipts. On Linux it fails
+closed unless `bwrap`, `strace`, and `prlimit` can enforce a read-only host plus audited empty
+write root; any attempted local filesystem mutation returns `WRITE_DETECTED`.
+
 ```bash
 git clone https://github.com/poweredbyGEN/graph-engineering.git
 cd graph-engineering
@@ -177,6 +214,8 @@ uv venv && uv pip install -e ".[dev]"
 uv run graph-engineer --help
 uv run graph-engineering-mcp --help
 
+uv run graph-engineer assess --repo "$PWD" --json
+uv run graph-engineer init --repo "$PWD" --json
 uv run graph-engineer doctor --repo "$PWD"
 uv run graph-engineer validate workflow.json
 uv run graph-engineer plan workflow.json
@@ -186,6 +225,7 @@ uv run graph-engineering-mcp --database "$HOME/.local/state/graph-engineering/ta
 
 The final command starts the portable MCP task server over stdio. See [CLI.md](docs/CLI.md) for the
 JSON workflow and durable-run contract, [MCP.md](docs/MCP.md) for client integration,
+[A2A.md](docs/A2A.md) for independently operated remote workers,
 [SUBAGENTS.md](docs/SUBAGENTS.md) for portable worker profiles, and [SETUP.md](docs/SETUP.md) for
 the deterministic verification harness. [PILOTS.md](docs/PILOTS.md) reports both the successful
 speedup and the slower graph that blocked a defect, including cold-adoption failures.

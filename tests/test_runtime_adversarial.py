@@ -99,6 +99,144 @@ def capture(engine, run_id, errors):
         errors.append(exc)
 
 
+def test_resume_recomputes_a_persisted_join_after_interrupted_member(tmp_path):
+    # intent: a crash cannot lose or manufacture votes; settlement is rebuilt from fenced node state.
+    members = [n("a", required=False), n("b", required=False)]
+    join = n(
+        "join",
+        needs=["a", "b"],
+        join={"policy": "all_settled"},
+    )
+    value = wf([*members, join])
+    db, art = tmp_path / "state.db", tmp_path / "art"
+    seed = Scheduler(value, db, art, {}, ok)
+    run_id = seed.state.create_run(value, "resume-join")
+    lease = seed.state.acquire_lease(run_id)
+    seed.state.set_node_status(run_id, "a", "optional_failed", "refuted", lease)
+    seed.state.start_attempt(run_id, "b", lease)
+    seed.state.record_join_state(
+        run_id,
+        "join",
+        {
+            "policy": "all_settled",
+            "threshold": 2,
+            "expected": 2,
+            "received": 1,
+            "passed": 0,
+            "failed": 1,
+            "cancelled": 0,
+            "missing": 1,
+            "decision": "waiting",
+            "settlements": {"a": "optional_failed", "b": "running"},
+        },
+        lease,
+    )
+    seed.state.release_lease(lease)
+
+    seen = []
+
+    def execute(context):
+        if context.node_id == "join":
+            seen.append(context.join)
+        return {"result": {"value": 1}}
+
+    result = Scheduler(
+        value,
+        db,
+        art,
+        {"b": execute, "join": execute},
+        ok,
+    ).run(run_id, resume=True)
+
+    assert result.status == "succeeded"
+    assert result.nodes["b"]["attempt_count"] == 2
+    assert seen[0]["decision"] == "succeeded"
+    assert seen[0]["received"] == 2
+    assert seen[0]["settlements"] == {"a": "optional_failed", "b": "succeeded"}
+
+
+def test_resume_preserves_exact_terminal_join_decision_before_node_start(tmp_path):
+    members = [n(name, required=False) for name in ("a", "b", "slow")]
+    join = n(
+        "join",
+        needs=["a", "b", "slow"],
+        join={"policy": "majority"},
+    )
+    value = wf([*members, join])
+    db, art = tmp_path / "state.db", tmp_path / "art"
+    seed = Scheduler(value, db, art, {}, ok)
+    run_id = seed.state.create_run(value, "resume-terminal-join")
+    lease = seed.state.acquire_lease(run_id)
+    for node_id in ("a", "b"):
+        number = seed.state.start_attempt(run_id, node_id, lease)
+        artifact = seed.artifacts.put({"value": 1}, SCHEMA)
+        seed.state.succeed_attempt(
+            run_id,
+            node_id,
+            number,
+            artifact.digest,
+            {"result": (artifact.digest, SCHEMA)},
+            lease,
+        )
+    seed.state.start_attempt(run_id, "slow", lease)
+    released = {
+        "policy": "majority",
+        "threshold": 2,
+        "expected": 3,
+        "received": 2,
+        "passed": 2,
+        "failed": 0,
+        "cancelled": 0,
+        "missing": 1,
+        "decision": "succeeded",
+        "settlements": {"a": "succeeded", "b": "succeeded", "slow": "running"},
+    }
+    seed.state.record_join_state(run_id, "join", released, lease)
+    seed.state.release_lease(lease)
+
+    seen = []
+
+    def execute(context):
+        if context.node_id == "join":
+            seen.append(context.join)
+        return {"result": {"value": 1}}
+
+    result = Scheduler(
+        value,
+        db,
+        art,
+        {"slow": execute, "join": execute},
+        ok,
+    ).run(run_id, resume=True)
+
+    assert result.status == "succeeded"
+    persisted = seed.state.join_state(run_id, "join")
+    assert persisted is not None
+    for key, expected in released.items():
+        assert persisted[key] == expected
+        assert seen[0][key] == expected
+
+
+def test_cancelled_run_persists_cancelled_join_settlements(tmp_path):
+    members = [n("a", required=False), n("b", required=False)]
+    join = n("join", needs=["a", "b"], join={"policy": "majority"})
+    value = wf([*members, join])
+    db, art = tmp_path / "state.db", tmp_path / "art"
+    engine = Scheduler(value, db, art, {}, ok)
+    run_id = engine.state.create_run(value, "cancelled-join")
+    engine.state.request_cancel(run_id)
+
+    result = engine.run(run_id, resume=True)
+
+    assert result.status == "cancelled"
+    persisted = engine.state.join_state(run_id, "join")
+    assert persisted is not None
+    assert persisted["received"] == 2
+    assert persisted["cancelled"] == 2
+    assert persisted["failed"] == 0
+    assert persisted["missing"] == 0
+
+
 def test_resume_cannot_mint_a_fresh_whole_workflow_timeout(tmp_path):
     # intent: sabotage persisted age; a restart must keep the original run deadline.
     value = wf([n("only")], timeout_seconds=1)
@@ -122,6 +260,32 @@ def test_resume_cannot_mint_a_fresh_whole_workflow_timeout(tmp_path):
 
     assert result.status == "cancelled"
     assert result.nodes["only"]["attempt_count"] == 0
+    assert calls == 0
+
+
+def test_resume_revalidates_schema_bounds_before_any_executor_runs(tmp_path):
+    # intent: a resumed run cannot bypass the same hostile-schema preflight as a new run.
+    valid = wf([n("only")])
+    db, art = tmp_path / "state.db", tmp_path / "art"
+    seed = Scheduler(valid, db, art, {}, ok)
+    run_id = seed.state.create_run(valid, "bounded-resume")
+    hostile = wf([n("only")])
+    schema: dict = {}
+    current = schema
+    for _ in range(2_000):
+        child: dict = {}
+        current["items"] = child
+        current = child
+    hostile["nodes"][0]["outputs"]["result"]["schema"] = schema
+    calls = 0
+
+    def execute(_context):
+        nonlocal calls
+        calls += 1
+        return {"result": {"value": 1}}
+
+    with pytest.raises(WorkflowValidationError, match="SCHEMA_DEPTH_EXCEEDED"):
+        Scheduler(hostile, db, art, {"only": execute}, ok).run(run_id, resume=True)
     assert calls == 0
 
 
@@ -323,6 +487,95 @@ def test_declared_node_timeout_is_bounded_and_late_result_is_fenced(tmp_path):
     assert elapsed < 1.3, f"node timeout ignored; elapsed={elapsed:.2f}s"
     time.sleep(0.6)
     assert engine.state.node_rows(result.run_id)["only"]["status"] == "failed"
+
+
+def test_progress_deadline_fences_late_green_output_without_persisting_artifact(
+    tmp_path,
+):
+    # intent: a green schema/check result arriving after the durable progress budget
+    # cannot be accepted merely because the executor's larger node timeout remains.
+    only = n("only", timeout_seconds=5)
+    only["progress"] = {"max_elapsed_seconds": 1}
+    value = wf([only], timeout_seconds=10)
+    check_calls = 0
+
+    def green_check(*_args):
+        nonlocal check_calls
+        check_calls += 1
+        return CheckResult(True, "green")
+
+    engine = Scheduler(
+        value,
+        tmp_path / "state.db",
+        tmp_path / "art",
+        {"only": lambda _context: time.sleep(1.25) or {"result": {"value": 1}}},
+        green_check,
+    )
+
+    started = time.monotonic()
+    result = engine.run("progress-deadline")
+
+    assert result.status == "failed"
+    # Keep a generous process-level bound: this suite may run on a loaded shared
+    # host, while the state/error assertions below prove which deadline fired.
+    assert time.monotonic() - started < 3
+    assert engine.state.artifact(result.run_id, "only", "result") is None
+    time.sleep(0.35)
+    assert not list((tmp_path / "art").rglob("*.json"))
+    assert check_calls == 0
+    attempt = engine.state.attempt_rows(result.run_id)[0]
+    assert attempt["status"] == "failed"
+    assert "progress budget" in attempt["error"]
+
+
+def test_resume_with_expired_progress_deadline_dispatches_zero_workers(tmp_path):
+    # intent: process resume retains the original node start/deadline and cannot
+    # mint a fresh execution allowance before dispatch.
+    only = n("only", timeout_seconds=5)
+    only["progress"] = {"max_elapsed_seconds": 1}
+    only["retry"] = {"max_attempts": 2, "no_progress_limit": 2}
+    value = wf([only], timeout_seconds=10)
+    db = tmp_path / "state.db"
+    engine = Scheduler(value, db, tmp_path / "art", {}, ok)
+    run_id = engine.state.create_run(value, "expired-resume")
+    lease = engine.state.acquire_lease(run_id)
+    number = engine.state.start_attempt(run_id, "only", lease)
+    engine.state.finish_attempt(
+        run_id,
+        "only",
+        number,
+        "failed",
+        "a" * 64,
+        "first failure",
+        lease,
+        deterministic_check_count=1,
+    )
+    engine.state.set_node_status(run_id, "only", "pending", "retry", lease)
+    engine.state.release_lease(lease)
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            "UPDATE node_progress SET deadline_at=?,started_at=? "
+            "WHERE run_id=? AND node_id=?",
+            (time.time() - 1, time.time() - 2, run_id, "only"),
+        )
+
+    calls = 0
+
+    def must_not_dispatch(_context):
+        nonlocal calls
+        calls += 1
+        return {"result": {"value": 1}}
+
+    resumed = Scheduler(
+        value, db, tmp_path / "art", {"only": must_not_dispatch}, ok
+    ).run(run_id, resume=True)
+
+    assert resumed.status == "failed"
+    assert calls == 0
+    assert resumed.nodes["only"]["attempt_count"] == 1
+    progress = engine.state.progress_rows(run_id)["only"]
+    assert progress["decision"] == "stop"
+    assert progress["reason"] == "elapsed budget exhausted on resume"
 
 
 def test_declared_check_timeout_is_enforced(tmp_path):

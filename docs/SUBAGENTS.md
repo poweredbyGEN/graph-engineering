@@ -52,6 +52,12 @@ schema subset until a deterministic schema compiler is available. Deterministic 
 the orchestrator. If a read-only graph node genuinely needs MCP, define a separate private profile
 with an explicit server/tool policy and set `mcp = true` only for that profile.
 
+Use a clean Codex executable for the private profile. Interactive wrapper scripts that inject
+hooks, approval bypasses, or additional configuration change the worker contract and can fail the
+hermetic doctor even when interactive Codex works. Codex is not ptrace-compatible during smoke, so
+doctor uses its outer read-only mount namespace without syscall-attempt tracing; schema validation,
+timeouts, output caps, disposable state, and the empty-repository check remain mandatory.
+
 ## Kimi K3 and GLM 5.2 through OpenCode
 
 The runtime currently executes `subprocess` profiles. Its `openai-compatible` profile shape is

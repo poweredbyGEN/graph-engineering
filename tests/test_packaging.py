@@ -23,6 +23,7 @@ sys.modules[SPEC.name] = release_gate
 SPEC.loader.exec_module(release_gate)
 GateError = release_gate.GateError
 assert_release_context = release_gate.assert_release_context
+assert_installed_capabilities = release_gate.assert_installed_capabilities
 assert_version_contract = release_gate.assert_version_contract
 refresh_public_history = release_gate.refresh_public_history
 refresh_release_tag = release_gate.refresh_release_tag
@@ -37,6 +38,18 @@ def test_release_gates_require_lockfile_consistency() -> None:
     # intent: a stale lock must fail rather than being silently rewritten during packaging.
     commands = [argv for argv, _environment in release_gate._gate_commands()]
     assert ("uv", "lock", "--check") in commands
+
+
+def test_release_gate_rejects_installed_capability_manifest_drift(capsys) -> None:
+    # intent: source tests cannot substitute for the actual wheel's discovery contract.
+    from graph_engineering import cli
+
+    assert cli.main(["capabilities", "--json"]) == 0
+    output = capsys.readouterr().out
+    assert_installed_capabilities(output, "0.1.0a1")
+    drifted = output.replace('"worker_smoke":true', '"worker_smoke":false')
+    with pytest.raises(GateError, match="worker smoke"):
+        assert_installed_capabilities(drifted, "0.1.0a1")
 
 
 def test_release_version_contract_rejects_stale_runtime_or_changelog(
