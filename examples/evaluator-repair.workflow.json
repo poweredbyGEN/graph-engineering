@@ -1,0 +1,96 @@
+{
+  "version": "graph-engineering/v1alpha1",
+  "id": "evaluator_repair",
+  "goal": "Produce, independently critique, and revise an artifact under deterministic tests",
+  "budgets": {
+    "max_nodes": 3,
+    "max_concurrency": 1,
+    "max_attempts_per_node": 2,
+    "max_total_attempts": 4,
+    "timeout_seconds": 1800
+  },
+  "nodes": [
+    {
+      "id": "produce",
+      "kind": "agent",
+      "task": "Produce the first bounded candidate and cite repository evidence.",
+      "needs": [],
+      "inputs": {},
+      "outputs": {
+        "candidate": {
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["summary", "evidence"],
+            "properties": {
+              "summary": {"type": "string"},
+              "evidence": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        }
+      },
+      "profile": "implementation",
+      "workspace": "read-only",
+      "permission": "read",
+      "checks": [{"id": "baseline_tests", "argv": ["python", "-m", "pytest", "-q"]}],
+      "retry": {"max_attempts": 1, "no_progress_limit": 1},
+      "required": true
+    },
+    {
+      "id": "evaluate",
+      "kind": "agent",
+      "task": "Independently identify specific defects. Your verdict is advice, not acceptance authority.",
+      "needs": ["produce"],
+      "inputs": {"candidate": "produce.candidate"},
+      "outputs": {
+        "critique": {
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["verdict", "defects"],
+            "properties": {
+              "verdict": {"enum": ["pass", "revise"]},
+              "defects": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        }
+      },
+      "profile": "verification",
+      "workspace": "read-only",
+      "permission": "read",
+      "checks": [{"id": "evaluation_tests", "argv": ["python", "-m", "pytest", "-q"]}],
+      "retry": {"max_attempts": 1, "no_progress_limit": 1},
+      "required": true
+    },
+    {
+      "id": "repair",
+      "kind": "agent",
+      "task": "Revise the candidate against the typed critique and return final evidence. Tests, not the critique, decide acceptance.",
+      "needs": ["produce", "evaluate"],
+      "inputs": {
+        "candidate": "produce.candidate",
+        "critique": "evaluate.critique"
+      },
+      "outputs": {
+        "result": {
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["summary", "evidence"],
+            "properties": {
+              "summary": {"type": "string"},
+              "evidence": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        }
+      },
+      "profile": "implementation",
+      "workspace": "read-only",
+      "permission": "read",
+      "checks": [{"id": "final_tests", "argv": ["python", "-m", "pytest", "-q"]}],
+      "retry": {"max_attempts": 2, "no_progress_limit": 1},
+      "required": true
+    }
+  ],
+  "outputs": {"result": "repair.result"}
+}

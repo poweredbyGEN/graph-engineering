@@ -8,6 +8,10 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- Reviewed workflow compilation: model proposals are bound to the frozen product contract,
+  repository assessment, and exact digest, then require distinct named-human acceptance.
+- Typed finite read-only profile fallback and reusable profile-fallback/evaluator-repair examples;
+  deterministic project checks remain the acceptance authority.
 - An authoritative `graph-engineer capabilities --json` runtime manifest and opt-in,
   isolated, bounded, redacted `doctor --smoke` validation for selected private workers.
 - Disposable smoke aliases for CLIs that hardcode temporary or local data/state paths, while

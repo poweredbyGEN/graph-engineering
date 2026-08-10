@@ -277,6 +277,9 @@ class PortableRuntime:
         self._lock = threading.Lock()
         self._run_lock = threading.Lock()
         self._profiles: dict[str, Profile] = {}
+        self._fallback_profiles: dict[
+            str, tuple[tuple[dict[str, Any], Profile], ...]
+        ] = {}
         self._worktrees: dict[tuple[str, int], Worktree] = {}
         self._snapshots: dict[tuple[str, int], ChangeSet] = {}
         self._agent_receipts: dict[str, ExecutionReceipt] = {}
@@ -352,6 +355,33 @@ class PortableRuntime:
                         f"read-only agent {node['id']!r} may not declare a changeset",
                     )
                 self._profiles[node["id"]] = profile
+                fallbacks: list[tuple[dict[str, Any], Profile]] = []
+                for route in node.get("fallback", {}).get("routes", []):
+                    fallback_profile = get_profile(
+                        self.config,
+                        route["profile"],
+                        required=_required_capabilities(node),
+                    )
+                    if isinstance(fallback_profile.adapter, OpenAICompatibleAdapter):
+                        raise OrchestrationError(
+                            "UNSUPPORTED_ADAPTER",
+                            f"fallback profile {fallback_profile.name!r} uses an unsupported adapter",
+                        )
+                    if (
+                        isinstance(fallback_profile.adapter, A2AAdapter)
+                        and fallback_profile.capabilities.mcp
+                    ):
+                        raise OrchestrationError(
+                            "A2A_AUTHORITY",
+                            f"remote fallback profile {fallback_profile.name!r} may not inherit local MCP authority",
+                        )
+                    if node.get("model") not in {None, fallback_profile.model}:
+                        raise OrchestrationError(
+                            "MODEL_MISMATCH",
+                            f"fallback profile {fallback_profile.name!r} does not match the node model pin",
+                        )
+                    fallbacks.append((route, fallback_profile))
+                self._fallback_profiles[node["id"]] = tuple(fallbacks)
                 continue
 
             if node["kind"] == "integration":
@@ -413,7 +443,7 @@ class PortableRuntime:
     def _profile_manifest(self) -> dict[str, Any]:
         """Return the credential-free identity of every dispatched profile."""
 
-        return {
+        manifest = {
             node_id: {
                 "profile": profile.name,
                 "model": profile.model,
@@ -423,6 +453,18 @@ class PortableRuntime:
             }
             for node_id, profile in sorted(self._profiles.items())
         }
+        for node_id, fallbacks in sorted(self._fallback_profiles.items()):
+            for route, profile in fallbacks:
+                manifest[f"{node_id}:fallback:{route['id']}"] = {
+                    "profile": profile.name,
+                    "model": profile.model,
+                    "adapter_kind": profile.adapter_kind,
+                    "adapter": asdict(profile.adapter),
+                    "capabilities": asdict(profile.capabilities),
+                    "on_codes": list(route["on_codes"]),
+                    "max_uses": route["max_uses"],
+                }
+        return manifest
 
     def _bind_execution_identity(self, run_id: str) -> None:
         profiles = self._profile_manifest()
@@ -857,7 +899,8 @@ class PortableRuntime:
         )
 
     def _agent_executor(self, node: dict[str, Any]) -> Executor:
-        profile = self._profiles[node["id"]]
+        primary = self._profiles[node["id"]]
+        fallbacks = self._fallback_profiles.get(node["id"], ())
 
         def execute(context: ExecutionContext) -> Mapping[str, Any]:
             if context.cancelled():
@@ -865,13 +908,7 @@ class PortableRuntime:
                     "PROGRESS_DEADLINE_EXCEEDED",
                     "node reached its effective deadline before adapter dispatch",
                 )
-            attempt_id = _attempt_name(node["id"], context.attempt)
-            worktree = self.manager.create(
-                context.run_id, attempt_id, base=self.base_sha
-            )
             key = (node["id"], context.attempt)
-            with self._lock:
-                self._worktrees[key] = worktree
             output_name = next(
                 name for name in node["outputs"] if name != CHANGE_SET_OUTPUT
             )
@@ -881,62 +918,94 @@ class PortableRuntime:
                     "EXTERNAL_SCHEMA_UNSUPPORTED",
                     f"agent output {node['id']}.{output_name} uses an external schema",
                 )
-            request = AdapterRequest(
-                prompt=self._prompt(node, context),
-                cwd=worktree.path,
-                allowed_root=worktree.path,
-                node_id=node["id"],
-                run_id=context.run_id,
-                attempt=context.attempt,
-                result_schema=schema,
-                base_sha=self.base_sha,
-                idempotency_key=context.idempotency_key,
-                changeset_schema=(
-                    CHANGE_SET_SCHEMA
-                    if node["permission"] in {"write", "destructive"}
-                    and isinstance(profile.adapter, A2AAdapter)
-                    else None
-                ),
-                state_path=self.state_path,
-                cancelled=context.cancelled,
-                dispatch_guard=self._refresh_project_boundary,
+            candidates: list[tuple[str, Profile, frozenset[str] | None]] = [
+                ("primary", primary, None)
+            ]
+            candidates.extend(
+                (route["id"], profile, frozenset(route["on_codes"]))
+                for route, profile in fallbacks
             )
-            try:
-                node_timeout = node.get(
-                    "timeout_seconds", self.workflow["budgets"]["timeout_seconds"]
+            last_error: AdapterError | None = None
+            result = None
+            selected_profile = primary
+            worktree = None
+            for candidate_index, (route_id, profile, on_codes) in enumerate(candidates):
+                if on_codes is not None and (
+                    last_error is None or last_error.code not in on_codes
+                ):
+                    continue
+                attempt_id = _attempt_name(node["id"], context.attempt)
+                if fallbacks:
+                    attempt_id = f"{attempt_id}-f{candidate_index}"
+                worktree = self.manager.create(
+                    context.run_id, attempt_id, base=self.base_sha
                 )
-                effective_timeout = min(
-                    self.agent_limits.timeout_seconds, float(node_timeout)
+                request = AdapterRequest(
+                    prompt=self._prompt(node, context),
+                    cwd=worktree.path,
+                    allowed_root=worktree.path,
+                    node_id=node["id"],
+                    run_id=context.run_id,
+                    attempt=context.attempt,
+                    result_schema=schema,
+                    base_sha=self.base_sha,
+                    idempotency_key=context.idempotency_key,
+                    changeset_schema=(
+                        CHANGE_SET_SCHEMA
+                        if node["permission"] in {"write", "destructive"}
+                        and isinstance(profile.adapter, A2AAdapter)
+                        else None
+                    ),
+                    state_path=self.state_path,
+                    cancelled=context.cancelled,
+                    dispatch_guard=self._refresh_project_boundary,
                 )
-                if context.deadline_at is not None:
-                    remaining = context.deadline_at - time.time()
-                    if remaining <= 0:
-                        raise OrchestrationError(
-                            "PROGRESS_DEADLINE_EXCEEDED",
-                            "node reached its effective deadline before adapter dispatch",
-                        )
-                    effective_timeout = min(effective_timeout, remaining)
-                limits = ExecutionLimits(
-                    timeout_seconds=effective_timeout,
-                    terminate_grace_seconds=self.agent_limits.terminate_grace_seconds,
-                    max_stdout_bytes=self.agent_limits.max_stdout_bytes,
-                    max_stderr_bytes=self.agent_limits.max_stderr_bytes,
-                )
-                result = execute_profile(
-                    profile,
-                    request,
-                    limits=limits,
-                    environ=self.environ,
-                )
-            except AdapterError as exc:
-                if exc.receipt is not None:
-                    self._record_agent_receipt(
-                        f"{node['id']}#{context.attempt}", exc.receipt
+                try:
+                    node_timeout = node.get(
+                        "timeout_seconds", self.workflow["budgets"]["timeout_seconds"]
                     )
-                raise
-            self._record_agent_receipt(
-                f"{node['id']}#{context.attempt}", result.receipt
-            )
+                    effective_timeout = min(
+                        self.agent_limits.timeout_seconds, float(node_timeout)
+                    )
+                    if context.deadline_at is not None:
+                        remaining = context.deadline_at - time.time()
+                        if remaining <= 0:
+                            raise OrchestrationError(
+                                "PROGRESS_DEADLINE_EXCEEDED",
+                                "node reached its effective deadline before adapter dispatch",
+                            )
+                        effective_timeout = min(effective_timeout, remaining)
+                    limits = ExecutionLimits(
+                        timeout_seconds=effective_timeout,
+                        terminate_grace_seconds=self.agent_limits.terminate_grace_seconds,
+                        max_stdout_bytes=self.agent_limits.max_stdout_bytes,
+                        max_stderr_bytes=self.agent_limits.max_stderr_bytes,
+                    )
+                    result = execute_profile(
+                        profile,
+                        request,
+                        limits=limits,
+                        environ=self.environ,
+                    )
+                except AdapterError as exc:
+                    if exc.receipt is not None:
+                        receipt_key = f"{node['id']}#{context.attempt}"
+                        if fallbacks:
+                            receipt_key = f"{receipt_key}:{route_id}"
+                        self._record_agent_receipt(receipt_key, exc.receipt)
+                    last_error = exc
+                    continue
+                receipt_key = f"{node['id']}#{context.attempt}"
+                if fallbacks:
+                    receipt_key = f"{receipt_key}:{route_id}"
+                self._record_agent_receipt(receipt_key, result.receipt)
+                selected_profile = profile
+                break
+            if result is None or worktree is None:
+                assert last_error is not None
+                raise last_error
+            with self._lock:
+                self._worktrees[key] = worktree
             if context.cancelled():
                 raise OrchestrationError(
                     "PROGRESS_DEADLINE_EXCEEDED",
@@ -945,7 +1014,7 @@ class PortableRuntime:
 
             writing = node["permission"] in {"write", "destructive"}
             scope = node.get("write_scope", []) if writing else []
-            if writing and isinstance(profile.adapter, A2AAdapter):
+            if writing and isinstance(selected_profile.adapter, A2AAdapter):
                 change = change_set_from_value(result.changeset)
                 self.manager.apply(worktree.path, change, write_scope=scope)
             change = self.manager.capture(worktree, write_scope=scope)

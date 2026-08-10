@@ -178,3 +178,43 @@ The runtime supplies `integration_failure` as a fixed typed artifact with `code`
 `failure_digest`. It invalidates only declared targets, preserves unrelated producer artifacts,
 and rebuilds integration. Unknown checks, ambiguous routes, non-check failures, exhausted budgets,
 and repeated identical failure digests stop without an inferred target.
+
+## Typed profile fallback
+
+A read-only, replay-safe agent may name up to four ordered fallback profiles. Each route is used at
+most once and runs only after the immediately preceding profile returns one of its exact typed
+adapter failure codes:
+
+```json
+"fallback": {
+  "routes": [{
+    "id": "backup_provider",
+    "profile": "backup-research",
+    "on_codes": ["SPAWN_FAILED", "TIMEOUT", "OUTPUT_LIMIT"],
+    "max_uses": 1
+  }]
+}
+```
+
+No wildcard failure code or model-selected profile exists. Every candidate gets a fresh isolated
+worktree, and a successful fallback still must pass the node's deterministic checks before its
+artifact releases an edge. Automatic fallback is rejected for writing, external, destructive, or
+non-idempotent nodes; route those failures to an explicit human or new run instead. See
+`examples/profile-fallback.workflow.json`.
+
+## Evaluator-repair topology
+
+Use an acyclic, bounded `produce -> evaluate -> repair` topology when fresh-context critique adds
+value. The evaluator returns typed defects but never decides acceptance. The repair node consumes
+both candidate and critique, and deterministic project tests gate the final artifact. See
+`examples/evaluator-repair.workflow.json`. For code-writing repair driven by a combined integration
+failure, use `examples/repair-route.workflow.json`; its exact check-to-writer route is authoritative.
+
+## Controlled workflow compilation
+
+Treat model-created workflow JSON as untrusted input. `graph-engineer compile` binds a validated
+candidate to the current assessment source, repository identity, and frozen product-contract
+generation in an inert `workflow-proposal/v1` envelope. It does not create a runnable workflow.
+`graph-engineer accept` requires the exact proposal digest, the frozen contract's named human
+approver, and a distinct proposer; it revalidates all bindings before writing a new workflow plus
+acceptance receipt. Never run the raw candidate or use a model identity as the approver.

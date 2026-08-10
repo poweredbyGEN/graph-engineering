@@ -107,6 +107,46 @@ def test_valid_workflow_passes():
     validate_workflow(workflow())
 
 
+def test_fallback_routes_are_typed_finite_and_read_only():
+    value = workflow()
+    node = value["nodes"][0]
+    node["fallback"] = {
+        "routes": [
+            {
+                "id": "backup",
+                "profile": "backup",
+                "on_codes": ["TIMEOUT", "WORKER_EXIT"],
+                "max_uses": 1,
+            }
+        ]
+    }
+    validate_workflow(value)
+
+    node["permission"] = "write"
+    node["workspace"] = "worktree"
+    node["write_scope"] = ["src/**"]
+    with pytest.raises(WorkflowValidationError) as caught:
+        validate_workflow(value)
+    assert "UNSAFE_FALLBACK_EFFECT" in codes(caught.value)
+
+
+def test_fallback_routes_cannot_repeat_a_profile():
+    value = workflow()
+    value["nodes"][0]["fallback"] = {
+        "routes": [
+            {
+                "id": "same",
+                "profile": "claude",
+                "on_codes": ["TIMEOUT"],
+                "max_uses": 1,
+            }
+        ]
+    }
+    with pytest.raises(WorkflowValidationError) as caught:
+        validate_workflow(value)
+    assert codes(caught.value) == {"DUPLICATE_FALLBACK_PROFILE"}
+
+
 def _nested_schema(depth: int) -> dict:
     root: dict = {}
     current = root

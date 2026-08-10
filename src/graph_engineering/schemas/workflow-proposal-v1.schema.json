@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/poweredbyGEN/graph-engineering/schemas/workflow-proposal-v1.schema.json",
+  "title": "graph-engineering reviewed workflow proposal v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "id",
+    "proposed_by",
+    "repository_digest",
+    "assessment_source",
+    "assessment_digest",
+    "product_contract",
+    "workflow",
+    "digest"
+  ],
+  "properties": {
+    "version": {"const": "graph-engineering/workflow-proposal/v1"},
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+    "proposed_by": {"type": "string", "minLength": 1, "maxLength": 128},
+    "repository_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "assessment_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["head_sha", "source_digest"],
+      "properties": {
+        "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+        "source_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "assessment_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "product_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "generation", "digest"],
+      "properties": {
+        "version": {"const": "graph-engineering/product-contract/v2"},
+        "generation": {"type": "integer", "minimum": 1},
+        "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "workflow": {"type": "object"},
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

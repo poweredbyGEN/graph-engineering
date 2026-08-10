@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from . import __version__
+from .compilation import PROPOSAL_VERSION
 from .config import CAPABILITY_NAMES
 from .contracts import WORKFLOW_VERSION, workflow_schema
 from .lifecycle import CONTEXT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION
@@ -32,6 +33,7 @@ def capability_manifest(cli_commands: Sequence[str]) -> dict[str, Any]:
         "package_version": __version__,
         "schema_versions": {
             "workflow": WORKFLOW_VERSION,
+            "workflow_proposal": PROPOSAL_VERSION,
             "project": PROJECT_VERSION,
             "product_contract": PRODUCT_CONTRACT_VERSION,
             "assessment": ASSESSMENT_VERSION,
@@ -57,6 +59,7 @@ def capability_manifest(cli_commands: Sequence[str]) -> dict[str, Any]:
             "attempt_fencing": True,
             "durable_resume": True,
             "typed_repair_routes": True,
+            "typed_profile_fallback": True,
         },
         "execution": {
             "profile_capabilities": sorted(CAPABILITY_NAMES),
@@ -83,6 +86,7 @@ def capability_manifest(cli_commands: Sequence[str]) -> dict[str, Any]:
             "worker_smoke": True,
             "visual_builder": False,
             "self_generated_workflows": False,
+            "reviewed_workflow_compilation": True,
         },
     }
 

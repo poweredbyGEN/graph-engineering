@@ -78,7 +78,8 @@ SQLite run state, immutable artifact receipts, fenced worktree change transfer, 
 selection, local subprocess adapters, an optional A2A remote-worker adapter, and an MCP task
 coordination server. The deliberately thin
 [`graph-engineer` CLI](docs/CLI.md) exposes only the deterministic operations justified by project
-pilots: assess/init, validate, doctor, plan, run/resume/handoff, status, and trace. It is not a graph editor or a second
+pilots: assess/init, reviewed compile/accept, validate, doctor, plan, run/resume/handoff, status,
+and trace. It is not a graph editor or a second
 orchestration framework. The `graph-engineering` skill remains the portable playbook for drawing
 and executing graphs through host-native orchestration.
 
@@ -217,6 +218,15 @@ uv run graph-engineering-mcp --help
 uv run graph-engineer assess --repo "$PWD" --json
 uv run graph-engineer init --repo "$PWD" --json
 uv run graph-engineer doctor --repo "$PWD"
+# Model-proposed workflows cross compile -> named-human accept before run.
+uv run graph-engineer compile --repo "$PWD" --assessment /safe/assessment.json \
+  --candidate /safe/candidate.workflow.json --proposed-by planning-model \
+  --output /safe/candidate.proposal.json --json
+uv run graph-engineer accept --repo "$PWD" \
+  --proposal /safe/candidate.proposal.json \
+  --proposal-digest '<digest from compile>' --reviewed-by '<frozen named approver>' \
+  --workflow-output .graph-engineering/workflows/candidate.workflow.json \
+  --acceptance-output .graph-engineering/reviews/candidate.acceptance.json --json
 uv run graph-engineer validate workflow.json
 uv run graph-engineer plan workflow.json
 uv run graph-engineer run workflow.json --repo "$PWD" --run-id first-run
@@ -229,6 +239,11 @@ JSON workflow and durable-run contract, [MCP.md](docs/MCP.md) for client integra
 [SUBAGENTS.md](docs/SUBAGENTS.md) for portable worker profiles, and [SETUP.md](docs/SETUP.md) for
 the deterministic verification harness. [PILOTS.md](docs/PILOTS.md) reports both the successful
 speedup and the slower graph that blocked a defect, including cold-adoption failures.
+
+Reusable workflow contracts include
+[`profile-fallback.workflow.json`](examples/profile-fallback.workflow.json) for finite typed
+provider fallback and [`evaluator-repair.workflow.json`](examples/evaluator-repair.workflow.json)
+for bounded fresh-context critique whose result remains subordinate to deterministic tests.
 
 Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) describes the deterministic local
 gate and public/private boundary; [CHANGELOG.md](CHANGELOG.md) records user-visible releases.

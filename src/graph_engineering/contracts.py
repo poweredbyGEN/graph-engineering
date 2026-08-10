@@ -638,6 +638,50 @@ def validate_workflow(workflow: dict[str, Any]) -> None:
                         "a join that may admit failed or unsettled dependencies cannot bind their artifacts; consume the persisted join settlement instead",
                     )
                 )
+        fallback = node.get("fallback")
+        if fallback is not None:
+            if node["kind"] != "agent":
+                issues.append(
+                    ValidationIssue(
+                        "FALLBACK_ON_NON_AGENT",
+                        f"$.nodes[{index}].fallback",
+                        "only an agent node may declare profile fallback routes",
+                    )
+                )
+            if node["permission"] != "read" or node.get("effect") not in {
+                None,
+                "none",
+                "read",
+            }:
+                issues.append(
+                    ValidationIssue(
+                        "UNSAFE_FALLBACK_EFFECT",
+                        f"$.nodes[{index}].fallback",
+                        "automatic profile fallback is limited to read-only replay-safe nodes",
+                    )
+                )
+            route_ids: set[str] = set()
+            route_profiles: set[str] = {node.get("profile", "")}
+            for route_index, route in enumerate(fallback["routes"]):
+                route_path = f"$.nodes[{index}].fallback.routes[{route_index}]"
+                if route["id"] in route_ids:
+                    issues.append(
+                        ValidationIssue(
+                            "DUPLICATE_FALLBACK_ROUTE",
+                            f"{route_path}.id",
+                            f"duplicate fallback route id {route['id']!r}",
+                        )
+                    )
+                route_ids.add(route["id"])
+                if route["profile"] in route_profiles:
+                    issues.append(
+                        ValidationIssue(
+                            "DUPLICATE_FALLBACK_PROFILE",
+                            f"{route_path}.profile",
+                            "a fallback profile may appear only once and may not repeat the primary",
+                        )
+                    )
+                route_profiles.add(route["profile"])
         node_attempts = node.get("retry", {}).get("max_attempts", 1)
         if node_attempts > budgets["max_attempts_per_node"]:
             issues.append(

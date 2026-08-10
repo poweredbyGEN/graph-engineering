@@ -4,6 +4,7 @@ import json
 
 from graph_engineering import __version__, cli
 from graph_engineering.capabilities import CAPABILITIES_VERSION
+from graph_engineering.compilation import PROPOSAL_VERSION
 from graph_engineering.contracts import WORKFLOW_VERSION, workflow_schema
 from graph_engineering.lifecycle import CONTEXT_SCHEMA_VERSION, EVENT_SCHEMA_VERSION
 from graph_engineering.project import (
@@ -34,6 +35,7 @@ def test_capability_manifest_matches_parser_schema_and_runtime_constants(capsys)
     }
     assert manifest["schema_versions"] == {
         "workflow": WORKFLOW_VERSION,
+        "workflow_proposal": PROPOSAL_VERSION,
         "project": PROJECT_VERSION,
         "product_contract": PRODUCT_CONTRACT_VERSION,
         "assessment": ASSESSMENT_VERSION,
@@ -44,5 +46,8 @@ def test_capability_manifest_matches_parser_schema_and_runtime_constants(capsys)
     }
     assert manifest["features"]["worker_smoke"] is True
     assert manifest["features"]["visual_builder"] is False
+    assert manifest["features"]["reviewed_workflow_compilation"] is True
+    assert manifest["features"]["self_generated_workflows"] is False
+    assert manifest["runtime"]["typed_profile_fallback"] is True
     assert manifest["transports"]["mcp"]["available"] is True
     assert manifest["transports"]["a2a"]["available"] is True

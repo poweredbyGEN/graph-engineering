@@ -129,6 +129,101 @@ def config(*, write: bool = True, mcp: bool = True, model: str = "test-model"):
     )
 
 
+def fallback_config():
+    capabilities = {
+        "read": True,
+        "write": False,
+        "structured_output": True,
+        "worktree": False,
+        "resume": False,
+        "mcp": False,
+    }
+    return parse_agent_config(
+        {
+            "version": 1,
+            "profiles": {
+                "primary": {
+                    "adapter": "subprocess",
+                    "model": "primary-model",
+                    "capabilities": capabilities,
+                    "subprocess": {
+                        "argv": [sys.executable, "-c", "raise SystemExit(7)"],
+                        "prompt_transport": "stdin",
+                        "output_format": "json",
+                        "env_allowlist": [],
+                    },
+                },
+                "backup": {
+                    "adapter": "subprocess",
+                    "model": "backup-model",
+                    "capabilities": capabilities,
+                    "subprocess": {
+                        "argv": [
+                            sys.executable,
+                            "-c",
+                            "import json; print(json.dumps({{'ok': True}}))",
+                        ],
+                        "prompt_transport": "stdin",
+                        "output_format": "json",
+                        "env_allowlist": [],
+                    },
+                },
+            },
+        }
+    )
+
+
+def fallback_workflow(*, on_code: str = "WORKER_EXIT") -> dict:
+    return {
+        "version": "graph-engineering/v1alpha1",
+        "id": "fallback_test",
+        "goal": "Use only a predeclared bounded profile fallback",
+        "budgets": {
+            "max_nodes": 1,
+            "max_concurrency": 1,
+            "max_attempts_per_node": 1,
+            "max_total_attempts": 1,
+            "timeout_seconds": 20,
+        },
+        "nodes": [
+            {
+                "id": "research",
+                "kind": "agent",
+                "task": "Return the typed result.",
+                "needs": [],
+                "inputs": {},
+                "outputs": {
+                    "result": {
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["ok"],
+                            "properties": {"ok": {"const": True}},
+                        }
+                    }
+                },
+                "profile": "primary",
+                "workspace": "read-only",
+                "permission": "read",
+                "checks": [{"id": "proof", "argv": [sys.executable, "-c", "pass"]}],
+                "retry": {"max_attempts": 1, "no_progress_limit": 1},
+                "fallback": {
+                    "routes": [
+                        {
+                            "id": "backup",
+                            "profile": "backup",
+                            "on_codes": [on_code],
+                            "max_uses": 1,
+                        }
+                    ]
+                },
+                "required": True,
+            }
+        ],
+        "outputs": {"result": "research.result"},
+    }
+
+
 def writer(node_id: str, path: str, content: str, *, scope: str | None = None) -> dict:
     return {
         "id": node_id,
@@ -260,6 +355,35 @@ def test_parallel_disjoint_writers_transfer_artifacts_into_one_integration(repo:
     assert (integration_path / "src/second.txt").read_text() == "second\n"
     assert not (repo / "src/first.txt").exists()
     assert len(result.check_receipts) == 3
+
+
+def test_declared_fallback_runs_only_after_matching_typed_failure(repo: Path):
+    # intent: provider fallback is finite, predeclared, and still subject to the
+    # node's deterministic acceptance check before its artifact releases an edge.
+    result = runtime(repo, fallback_workflow(), agent_config=fallback_config()).run(
+        run_id="fallback"
+    )
+
+    assert result.run.status == "succeeded"
+    assert result.outputs == {"result": {"ok": True}}
+    assert {receipt.profile for receipt in result.agent_receipts.values()} == {
+        "primary",
+        "backup",
+    }
+    assert len(result.check_receipts) == 1
+
+
+def test_undeclared_failure_does_not_improvise_a_fallback(repo: Path):
+    result = runtime(
+        repo,
+        fallback_workflow(on_code="TIMEOUT"),
+        agent_config=fallback_config(),
+    ).run(run_id="no-improvised-fallback")
+
+    assert result.run.status == "failed"
+    assert {receipt.profile for receipt in result.agent_receipts.values()} == {
+        "primary"
+    }
 
 
 def test_agent_prompt_embeds_the_exact_canonical_output_contract(repo: Path):

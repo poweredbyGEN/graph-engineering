@@ -36,6 +36,25 @@ assessment, pass `--from-assessment <path>`—the CLI rejects it if HEAD or trac
 changed. Resume a matching active run instead of creating a duplicate. Assessment and init never
 infer secrets, approvals, MCP/A2A transport, deployment targets, or permission to perform effects.
 
+When a model proposes the workflow, never copy its JSON directly into `workflows/` and run it.
+Create an assessment outside the repository, compile the candidate into an inert digest-bound
+proposal, and have the named product-contract approver accept that exact proposal:
+
+```bash
+graph-engineer compile --repo "$PWD" --assessment /safe/assessment.json \
+  --candidate /safe/candidate.workflow.json --proposed-by planning-model \
+  --output /safe/candidate.proposal.json --json
+graph-engineer accept --repo "$PWD" \
+  --proposal /safe/candidate.proposal.json \
+  --proposal-digest <digest-from-compile> --reviewed-by '<frozen named approver>' \
+  --workflow-output .graph-engineering/workflows/candidate.workflow.json \
+  --acceptance-output .graph-engineering/reviews/candidate.acceptance.json --json
+```
+
+Compilation validates schemas, project policy, the frozen contract, assessment source, effects,
+and budgets but grants no dispatch authority. Acceptance fails on source/contract drift,
+self-approval, reviewer mismatch, or digest mismatch. Only run the accepted workflow artifact.
+
 Before any dependency audit or worker fan-out, read
 [references/planning.md](references/planning.md). Discover the repository capsule, ask only its
 missing product questions, and require a named human to approve the frozen generation. `init` must

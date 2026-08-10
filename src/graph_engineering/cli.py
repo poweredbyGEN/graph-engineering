@@ -28,6 +28,7 @@ from .adapters import (
 )
 from .artifacts import canonical_json
 from .capabilities import capability_manifest
+from .compilation import CompilationError, accept_proposal, compile_proposal
 from .config import (
     DEFAULT_USER_CONFIG,
     ConfigError,
@@ -865,6 +866,82 @@ def _assess(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _compile(args: argparse.Namespace) -> dict[str, Any]:
+    repo = discover_repo(args.repo)
+    output_path = Path(args.output).expanduser().resolve()
+    if output_path.is_relative_to(repo):
+        raise SessionUxError(
+            "PROPOSAL_OUTPUT_SCOPE",
+            "proposal output must stay outside the repository until human acceptance",
+        )
+    workflow = _load_json_workflow(args.candidate)
+    proposal = compile_proposal(
+        repo,
+        assessment_path=Path(args.assessment).expanduser().resolve(strict=True),
+        workflow=workflow,
+        proposed_by=args.proposed_by,
+    )
+    output = str(_write_document(output_path, proposal))
+    return {
+        "ok": True,
+        "command": "compile",
+        "proposal_id": proposal["id"],
+        "proposal_digest": proposal["digest"],
+        "output": output,
+        "dispatch_authorized": False,
+    }
+
+
+def _accept(args: argparse.Namespace) -> dict[str, Any]:
+    repo = discover_repo(args.repo)
+    proposal_path = Path(args.proposal).expanduser().resolve(strict=True)
+    if proposal_path.is_relative_to(repo):
+        raise SessionUxError(
+            "PROPOSAL_INPUT_SCOPE",
+            "an unaccepted proposal must stay outside the repository",
+        )
+    workflow_output = Path(args.workflow_output).expanduser().resolve()
+    acceptance_output = Path(args.acceptance_output).expanduser().resolve()
+    expected_workflows = (repo / ".graph-engineering" / "workflows").resolve()
+    expected_reviews = (repo / ".graph-engineering" / "reviews").resolve()
+    if workflow_output.parent != expected_workflows:
+        raise SessionUxError(
+            "WORKFLOW_OUTPUT_SCOPE",
+            "accepted workflows must be written directly under .graph-engineering/workflows",
+        )
+    if acceptance_output.parent != expected_reviews:
+        raise SessionUxError(
+            "ACCEPTANCE_OUTPUT_SCOPE",
+            "acceptance receipts must be written directly under .graph-engineering/reviews",
+        )
+    proposal = _read_document(proposal_path, code="PROPOSAL_READ_ERROR")
+    workflow, acceptance = accept_proposal(
+        repo,
+        proposal,
+        expected_digest=args.proposal_digest,
+        reviewed_by=args.reviewed_by,
+    )
+    if workflow_output.exists() or acceptance_output.exists():
+        raise SessionUxError(
+            "OUTPUT_WRITE_ERROR",
+            "workflow and acceptance outputs must both be new files",
+        )
+    # Evidence lands first. A crash may leave an inert receipt, but never a runnable
+    # workflow without its acceptance evidence.
+    acceptance_path = _write_document(acceptance_output, acceptance)
+    workflow_path = _write_document(workflow_output, workflow)
+    return {
+        "ok": True,
+        "command": "accept",
+        "workflow_id": workflow["id"],
+        "workflow_digest": acceptance["workflow_digest"],
+        "proposal_digest": acceptance["proposal_digest"],
+        "workflow_output": str(workflow_path),
+        "acceptance_output": str(acceptance_path),
+        "dispatch_authorized": True,
+    }
+
+
 def _trace(args: argparse.Namespace) -> dict[str, Any]:
     if not _RUN_ID.fullmatch(args.run_id):
         raise CliError("INVALID_RUN_ID", "run id is not portable")
@@ -934,6 +1011,12 @@ def _error_payload(command: str | None, exc: BaseException) -> dict[str, Any]:
             "error": {"code": exc.code, "message": exc.message},
         }
     if isinstance(exc, SessionUxError):
+        return {
+            "ok": False,
+            "command": command,
+            "error": {"code": exc.code, "message": exc.message},
+        }
+    if isinstance(exc, CompilationError):
         return {
             "ok": False,
             "command": command,
@@ -1021,6 +1104,14 @@ def _print_human(payload: Mapping[str, Any]) -> None:
         )
         for gap in assessment["gaps"]:
             print(f"  {gap['priority']} {gap['id']}: {gap['remediation']}")
+    elif command == "compile":
+        print(f"proposal {payload['proposal_id']}: {payload['proposal_digest']}")
+        print(f"review required: {payload['output']}")
+    elif command == "accept":
+        print(
+            f"accepted workflow {payload['workflow_id']}: {payload['workflow_digest']}"
+        )
+        print(f"workflow: {payload['workflow_output']}")
     elif command == "trace":
         print(f"run {payload['run_id']}: {payload['event_count']} lifecycle events")
         if payload["truncated"]:
@@ -1131,6 +1222,28 @@ def _parser() -> argparse.ArgumentParser:
     assess.add_argument("--config")
     assess.add_argument("--output")
     assess.add_argument("--json", action="store_true", dest="json_output")
+
+    compile_command = subparsers.add_parser(
+        "compile", help="validate and bind a model-proposed workflow for human review"
+    )
+    compile_command.add_argument("--repo", required=True)
+    compile_command.add_argument("--assessment", required=True)
+    compile_command.add_argument("--candidate", required=True)
+    compile_command.add_argument("--proposed-by", required=True)
+    compile_command.add_argument("--output", required=True)
+    compile_command.add_argument("--json", action="store_true", dest="json_output")
+
+    accept = subparsers.add_parser(
+        "accept",
+        help="accept an immutable workflow proposal as its named human reviewer",
+    )
+    accept.add_argument("--repo", required=True)
+    accept.add_argument("--proposal", required=True)
+    accept.add_argument("--proposal-digest", required=True)
+    accept.add_argument("--reviewed-by", required=True)
+    accept.add_argument("--workflow-output", required=True)
+    accept.add_argument("--acceptance-output", required=True)
+    accept.add_argument("--json", action="store_true", dest="json_output")
     return parser
 
 
@@ -1184,6 +1297,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "assess":
             payload = _assess(args)
             exit_code = 0
+        elif args.command == "compile":
+            payload = _compile(args)
+            exit_code = 0
+        elif args.command == "accept":
+            payload = _accept(args)
+            exit_code = 0
         else:
             payload = _status(args)
             exit_code = 0 if payload["ok"] else 1
@@ -1194,6 +1313,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ProjectPolicyError,
         LifecycleError,
         SessionUxError,
+        CompilationError,
         CliError,
         KeyError,
         OSError,

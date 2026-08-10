@@ -14,6 +14,11 @@ import pytest
 import graph_engineering.orchestrator as orchestrator_module
 from graph_engineering import cli
 from graph_engineering.artifacts import canonical_json
+from graph_engineering.compilation import (
+    CompilationError,
+    accept_proposal,
+    compile_proposal,
+)
 from graph_engineering.config import parse_agent_config
 from graph_engineering.orchestrator import OrchestrationError, PortableRuntime
 from graph_engineering.project import (
@@ -347,6 +352,147 @@ def agent_config(marker: Path):
             },
         }
     )
+
+
+def _assessment_file(repo: Path, tmp_path: Path) -> Path:
+    path = tmp_path / "assessment.json"
+    path.write_text(json.dumps(assess_repo(repo)), encoding="utf-8")
+    return path
+
+
+def test_compiled_workflow_requires_distinct_named_human_acceptance(tmp_path: Path):
+    # intent: a model proposal is inert until the frozen contract approver accepts
+    # the exact digest; schema validation alone must never grant dispatch authority.
+    repo, _contract, value = reviewed_repo(tmp_path)
+    assessment = _assessment_file(repo, tmp_path)
+    proposal = compile_proposal(
+        repo,
+        assessment_path=assessment,
+        workflow=value,
+        proposed_by="planning-model",
+    )
+
+    with pytest.raises(CompilationError, match="REVIEWER_NOT_AUTHORIZED"):
+        accept_proposal(
+            repo,
+            proposal,
+            expected_digest=proposal["digest"],
+            reviewed_by="another-model",
+        )
+
+    workflow_value, receipt = accept_proposal(
+        repo,
+        proposal,
+        expected_digest=proposal["digest"],
+        reviewed_by="Policy Owner",
+    )
+    assert workflow_value == value
+    assert receipt["proposal_digest"] == proposal["digest"]
+    assert receipt["reviewed_by"] == "Policy Owner"
+
+
+def test_compiled_workflow_rejects_self_approval_and_digest_drift(tmp_path: Path):
+    repo, _contract, value = reviewed_repo(tmp_path)
+    assessment = _assessment_file(repo, tmp_path)
+    proposal = compile_proposal(
+        repo,
+        assessment_path=assessment,
+        workflow=value,
+        proposed_by="  policy owner  ",
+    )
+    with pytest.raises(CompilationError, match="SELF_APPROVAL_FORBIDDEN"):
+        accept_proposal(
+            repo,
+            proposal,
+            expected_digest=proposal["digest"],
+            reviewed_by="Policy Owner",
+        )
+
+    proposal["workflow"]["goal"] = "silently changed after review"
+    with pytest.raises(CompilationError, match="PROPOSAL_DIGEST_MISMATCH"):
+        accept_proposal(
+            repo,
+            proposal,
+            expected_digest=proposal["digest"],
+            reviewed_by="Policy Owner",
+        )
+
+
+def test_compiled_workflow_rejects_repository_source_drift(tmp_path: Path):
+    repo, _contract, value = reviewed_repo(tmp_path)
+    assessment = _assessment_file(repo, tmp_path)
+    proposal = compile_proposal(
+        repo,
+        assessment_path=assessment,
+        workflow=value,
+        proposed_by="planning-model",
+    )
+    (repo / "new-untracked-input.txt").write_text("drift\n", encoding="utf-8")
+
+    with pytest.raises(CompilationError, match="ASSESSMENT_DRIFT"):
+        accept_proposal(
+            repo,
+            proposal,
+            expected_digest=proposal["digest"],
+            reviewed_by="Policy Owner",
+        )
+
+
+def test_compile_accept_cli_keeps_unreviewed_proposal_outside_repo(
+    tmp_path: Path, capsys
+):
+    repo, _contract, value = reviewed_repo(tmp_path)
+    assessment = _assessment_file(repo, tmp_path)
+    candidate = tmp_path / "candidate.json"
+    proposal = tmp_path / "proposal.json"
+    candidate.write_text(json.dumps(value), encoding="utf-8")
+    assert (
+        cli.main(
+            [
+                "compile",
+                "--repo",
+                str(repo),
+                "--assessment",
+                str(assessment),
+                "--candidate",
+                str(candidate),
+                "--proposed-by",
+                "planning-model",
+                "--output",
+                str(proposal),
+                "--json",
+            ]
+        )
+        == 0
+    )
+    compiled = json.loads(capsys.readouterr().out)
+    workflow_output = repo / ".graph-engineering/workflows/accepted.json"
+    acceptance_output = repo / ".graph-engineering/reviews/accepted.json"
+    assert (
+        cli.main(
+            [
+                "accept",
+                "--repo",
+                str(repo),
+                "--proposal",
+                str(proposal),
+                "--proposal-digest",
+                compiled["proposal_digest"],
+                "--reviewed-by",
+                "Policy Owner",
+                "--workflow-output",
+                str(workflow_output),
+                "--acceptance-output",
+                str(acceptance_output),
+                "--json",
+            ]
+        )
+        == 0
+    )
+    accepted = json.loads(capsys.readouterr().out)
+    assert accepted["dispatch_authorized"] is True
+    assert workflow_output.is_file()
+    assert acceptance_output.is_file()
 
 
 def test_policy_rejects_wrong_root_remote_and_stale_base(tmp_path: Path):

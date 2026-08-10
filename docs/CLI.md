@@ -111,6 +111,28 @@ repository uses a bounded git-root fallback for read-only assessment, but remain
 unresolved and cannot pass execution preflight. A malformed, local-path, or ambiguous origin fails
 closed with `REMOTE_REVIEW_REQUIRED` rather than being serialized or silently reidentified.
 
+## Compile and review a model proposal
+
+Keep the assessment, raw candidate, and unaccepted proposal outside the repository:
+
+```bash
+graph-engineer compile --repo "$PWD" --assessment /safe/assessment.json \
+  --candidate /safe/candidate.workflow.json --proposed-by planning-model \
+  --output /safe/candidate.proposal.json --json
+graph-engineer accept --repo "$PWD" --proposal /safe/candidate.proposal.json \
+  --proposal-digest '<digest from compile>' --reviewed-by '<frozen named approver>' \
+  --workflow-output .graph-engineering/workflows/candidate.workflow.json \
+  --acceptance-output .graph-engineering/reviews/candidate.acceptance.json --json
+```
+
+`compile` validates the candidate against the current workflow schema, project policy, frozen
+product contract, repository assessment source, effects, and budgets. It emits an inert proposal
+and explicitly reports `dispatch_authorized: false`. `accept` requires the exact digest, a reviewer
+distinct from the proposer, and an exact match to the product contract's named approver. It
+revalidates source/contract/repository bindings, writes the new acceptance receipt first, and only
+then creates the new workflow; neither command overwrites an existing artifact. A raw candidate is
+never a reviewed graph.
+
 ## Validate and inspect topology
 
 ```bash
@@ -144,6 +166,18 @@ an automatic repair target.
 
 [`examples/repair-route.workflow.json`](../examples/repair-route.workflow.json) is validated in the
 test suite and uses the runtime's exact canonical changeset contract.
+
+### Typed profile fallback and evaluator-repair
+
+A read-only replay-safe agent may declare up to four ordered `fallback.routes`, each with one
+private profile, an exact `on_codes` set, and `max_uses: 1`. Every route uses a fresh isolated
+worktree. Unknown failures do not fall through, and successful fallback output still crosses the
+same deterministic node checks. Writing, external, destructive, and non-idempotent fallback is
+rejected. See [`profile-fallback.workflow.json`](../examples/profile-fallback.workflow.json).
+
+[`evaluator-repair.workflow.json`](../examples/evaluator-repair.workflow.json) demonstrates a
+bounded `produce -> evaluate -> repair` graph. The critique is typed advice; the repair's
+deterministic project tests—not the evaluator's verdict—remain acceptance authority.
 
 ## Run and resume
 

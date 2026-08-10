@@ -1,0 +1,55 @@
+{
+  "version": "graph-engineering/v1alpha1",
+  "id": "profile_fallback",
+  "goal": "Collect one typed result with one predeclared provider fallback",
+  "budgets": {
+    "max_nodes": 1,
+    "max_concurrency": 1,
+    "max_attempts_per_node": 1,
+    "max_total_attempts": 1,
+    "timeout_seconds": 900
+  },
+  "nodes": [
+    {
+      "id": "research",
+      "kind": "agent",
+      "task": "Return the requested repository finding with bounded evidence.",
+      "needs": [],
+      "inputs": {},
+      "outputs": {
+        "finding": {
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["claim", "evidence"],
+            "properties": {
+              "claim": {"type": "string"},
+              "evidence": {
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": 20
+              }
+            }
+          }
+        }
+      },
+      "profile": "primary-research",
+      "workspace": "read-only",
+      "permission": "read",
+      "checks": [{"id": "project_tests", "argv": ["python", "-m", "pytest", "-q"]}],
+      "retry": {"max_attempts": 1, "no_progress_limit": 1},
+      "fallback": {
+        "routes": [
+          {
+            "id": "backup_provider",
+            "profile": "backup-research",
+            "on_codes": ["SPAWN_FAILED", "TIMEOUT", "OUTPUT_LIMIT", "WORKER_EXIT"],
+            "max_uses": 1
+          }
+        ]
+      },
+      "required": true
+    }
+  ],
+  "outputs": {"finding": "research.finding"}
+}

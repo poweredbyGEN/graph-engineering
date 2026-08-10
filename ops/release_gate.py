@@ -36,7 +36,17 @@ CHANGELOG_HEADING = re.compile(
 )
 SOURCE_VERSION = re.compile(r'^__version__ = "([^"]+)"$', re.MULTILINE)
 REQUIRED_CAPABILITY_COMMANDS = frozenset(
-    {"capabilities", "doctor", "plan", "run", "status", "trace", "validate"}
+    {
+        "accept",
+        "capabilities",
+        "compile",
+        "doctor",
+        "plan",
+        "run",
+        "status",
+        "trace",
+        "validate",
+    }
 )
 
 
@@ -325,6 +335,7 @@ def assert_installed_capabilities(output: str, expected_version: str) -> None:
         raise GateError("installed capability manifest join policies drifted")
     required_schemas = {
         "workflow",
+        "workflow_proposal",
         "project",
         "product_contract",
         "assessment",
@@ -339,6 +350,12 @@ def assert_installed_capabilities(output: str, expected_version: str) -> None:
         raise GateError("installed capability manifest schema versions drifted")
     if manifest.get("features", {}).get("worker_smoke") is not True:
         raise GateError("installed capability manifest omits worker smoke")
+    if manifest.get("features", {}).get("reviewed_workflow_compilation") is not True:
+        raise GateError(
+            "installed capability manifest omits reviewed workflow compilation"
+        )
+    if manifest.get("runtime", {}).get("typed_profile_fallback") is not True:
+        raise GateError("installed capability manifest omits typed profile fallback")
 
 
 def build_and_smoke(scratch: Path) -> tuple[Path, Path]:
