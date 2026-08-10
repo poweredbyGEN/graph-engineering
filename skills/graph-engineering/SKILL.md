@@ -8,6 +8,28 @@ description: Plan and execute substantial software work as an evidence-gated dep
 Turn complex development work into a bounded graph whose scheduler—not an agent's narrative—
 decides what is ready and whose checks—not an agent's confidence—decide what is done.
 
+
+## Fan out by default — you are the orchestrator, not the worker
+
+**The default execution mode is parallel subagents.** When this skill is invoked, your job
+is to decompose, assign, and integrate — not to implement lanes yourself. Doing the lanes
+serially in your own context is the failure mode this skill exists to replace.
+
+1. **Decompose first.** Run the dependency audit; every node with no incoming real edge is
+   immediately dispatchable. Sequence you invented is not dependency (the fake edge test).
+2. **One agent per lane, one lane per agent.** Each writing node gets its own subagent in
+   its own isolated worktree. Never two agents on one target; never one agent on two lanes.
+   Use whatever the host provides: Claude Code Task/Agent tool, `codex exec`, `grok -p`,
+   A2A remote workers — the profile, not the graph, decides the engine.
+3. **You orchestrate:** dispatch ready nodes, watch evidence come back (`graph-engineer
+   watch --run-id … --pane <herdr-pane>` keeps a live status surface), retry ONLY the
+   failed lane, and own the integration node yourself. Supervise ~every 30–60s of activity;
+   reap finished or stuck lanes — high fan-out is fine, stale duplicates are not.
+4. **Evidence gates every lane.** A lane is done when its deterministic check passes and
+   survives independent refutation — never when its agent says so.
+5. **Scale honestly.** 3+ independent lanes → fan out. Genuinely sequential steps → say so
+   and skip graph overhead; a graph bought for one lane is rigidity for nothing.
+
 ## 1. Decide whether a graph pays
 
 Use graph execution when at least two of these are true:

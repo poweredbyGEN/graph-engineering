@@ -44,6 +44,7 @@ REQUIRED_CAPABILITY_COMMANDS = frozenset(
         "events",
         "fork",
         "plan",
+        "watch",
         "run",
         "status",
         "trace",
@@ -348,6 +349,7 @@ def assert_installed_capabilities(output: str, expected_version: str) -> None:
         "benchmark",
         "learning_proposal",
         "run_fork",
+        "run_watch",
         "event_stream",
     }
     if set(schemas) != required_schemas or any(
@@ -366,6 +368,8 @@ def assert_installed_capabilities(output: str, expected_version: str) -> None:
         raise GateError("installed capability manifest omits immutable run forks")
     if manifest.get("features", {}).get("bounded_event_stream") is not True:
         raise GateError("installed capability manifest omits bounded event stream")
+    if manifest.get("features", {}).get("live_run_watch") is not True:
+        raise GateError("installed capability manifest omits live run watch")
 
 
 def build_and_smoke(scratch: Path) -> tuple[Path, Path]:

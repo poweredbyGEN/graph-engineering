@@ -76,6 +76,8 @@ from .session_ux import (
 )
 from .state import StateStore
 from .supervision import analyze_topology, live_topology
+from .watch import DEFAULT_WAIT_SECONDS as WATCH_WAIT
+from .watch import HerdrSink, watch_run
 from .worktrees import WorktreeError, WorktreeManager
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$")
@@ -1021,6 +1023,25 @@ def _events(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _watch(args: argparse.Namespace) -> dict[str, Any]:
+    if not _RUN_ID.fullmatch(args.run_id):
+        raise CliError("INVALID_RUN_ID", "run id is not portable")
+    state_path = Path(args.state).expanduser().resolve(strict=True)
+    sink = (
+        HerdrSink(pane_id=args.pane, notify=not args.no_notify) if args.pane else None
+    )
+    summary = watch_run(
+        state_path,
+        args.run_id,
+        cursor=args.cursor,
+        wait_seconds=args.wait,
+        max_quiet_batches=args.max_quiet_batches,
+        sink=sink,
+        json_lines=args.json_output,
+    )
+    return {"ok": True, "command": "watch", "state": str(state_path), **summary}
+
+
 def _fork(args: argparse.Namespace) -> dict[str, Any]:
     if not _RUN_ID.fullmatch(args.run_id) or not _RUN_ID.fullmatch(args.new_run_id):
         raise CliError("INVALID_RUN_ID", "run id is not portable")
@@ -1331,6 +1352,23 @@ def _parser() -> argparse.ArgumentParser:
     events.add_argument("--wait", type=float, default=0)
     events.add_argument("--json", action="store_true", dest="json_output")
 
+    watch = subparsers.add_parser(
+        "watch", help="follow one run to a terminal state; optional Herdr pane sink"
+    )
+    watch.add_argument("--state", required=True)
+    watch.add_argument("--run-id", required=True)
+    watch.add_argument("--cursor")
+    watch.add_argument("--wait", type=float, default=WATCH_WAIT)
+    watch.add_argument(
+        "--max-quiet-batches",
+        type=int,
+        default=0,
+        help="stop after N consecutive empty batches (0 = wait forever)",
+    )
+    watch.add_argument("--pane", help="Herdr pane id to keep titled with live status")
+    watch.add_argument("--no-notify", action="store_true")
+    watch.add_argument("--json", action="store_true", dest="json_output")
+
     fork = subparsers.add_parser(
         "fork", help="create an immutable fresh run from a verified checkpoint"
     )
@@ -1439,6 +1477,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             exit_code = 0
         elif args.command == "events":
             payload = _events(args)
+            exit_code = 0
+        elif args.command == "watch":
+            payload = _watch(args)
             exit_code = 0
         elif args.command == "fork":
             payload = _fork(args)
