@@ -1,11 +1,11 @@
 {
-  "sub_type": "developer framework/platform for agent harnesses and workflows",
+  "sub_type": "multi-user developer framework/toolkit for agent harness engineering",
   "app_type": "generic-software-floor",
   "axis": null,
   "languages": [
     {
       "language": "Python",
-      "files": 58
+      "files": 92
     }
   ],
   "categories": [
@@ -14,9 +14,20 @@
       "aliases": "error handling / exception handling / error messages / graceful failure",
       "day1_tell": "Feed it malformed input and a dead dependency; confirm a useful error, not a stack trace or silent wrong answer.",
       "tier": "required",
-      "status": "covered",
-      "reasoning": "Runtime, adapters, loop code, adversarial tests, and docs explicitly emphasize malformed-input/dependency failures as deterministic results rather than silent wrong answers or raw exceptions.",
-      "citation_unverified": false
+      "status": "partial",
+      "reasoning": "Adapter and MCP/store error types exist, but evidence shows at least one example store still leaks a bare KeyError and there is not enough evidence that all malformed/dead-dependency paths return user-oriented errors.",
+      "citation_unverified": false,
+      "fix_sites": [
+        {
+          "file": "examples/todo-api/src/todo_api/store.py",
+          "what": "Replace the bare KeyError path with a domain NotFound error and add a regression test for the public error surface."
+        },
+        {
+          "file": "tests/test_adapters.py",
+          "what": "Add tests for malformed adapter output and dead subprocess/dependency failures asserting clean AdapterError messages without tracebacks."
+        }
+      ],
+      "fix_sites_unverified": false
     },
     {
       "category": "logging and diagnostics",
@@ -24,16 +35,16 @@
       "day1_tell": "Reproduce a failure and confirm the logs alone are enough to localize it (level, context, no secrets).",
       "tier": "required",
       "status": "partial",
-      "reasoning": "MCP docs and roadmap mention diagnostics, logging, and persisted evidence, but the evidence does not show a concrete logging contract with levels, context fields, and secret-redaction guarantees for failures.",
+      "reasoning": "The repo emphasizes redacted receipts and diagnostics in docs/tests, but the evidence does not show a consistent logging policy or structured failure logs sufficient to localize failures across the runtime.",
       "citation_unverified": false,
       "fix_sites": [
         {
           "file": "docs/MCP.md",
-          "what": "Document the structured diagnostic fields emitted for MCP failures, including level, node/profile/run context, and explicit redaction rules."
+          "what": "Document diagnostic log fields, levels, redaction rules, and how to reproduce/localize MCP failures from logs."
         },
         {
-          "file": "src/graph_engineering/mcp/server.py",
-          "what": "Ensure server-side errors are logged or returned with stable diagnostic codes and contextual fields without secrets."
+          "file": "tests/test_cli.py",
+          "what": "Assert failed CLI commands emit structured context and no secrets while avoiding raw stack traces for expected failures."
         }
       ],
       "fix_sites_unverified": false
@@ -44,7 +55,7 @@
       "day1_tell": "Send hostile input (oversized, wrong type, injection-shaped) at every external boundary and confirm rejection.",
       "tier": "required",
       "status": "covered",
-      "reasoning": "The orchestrator, contracts, worktree handling, example store tests, and workflow-contract documentation indicate external inputs are schema-validated and hostile path/workspace inputs are rejected.",
+      "reasoning": "External boundaries such as adapters, CLI/project policy, orchestrator, and runtime are represented in code and tests, with evidence of explicit parsing and validation of input fields and usage values.",
       "citation_unverified": false
     },
     {
@@ -53,7 +64,7 @@
       "day1_tell": "Boot with zero config (sane defaults), then override one value via file AND env var; confirm precedence is documented.",
       "tier": "required",
       "status": "covered",
-      "reasoning": "Configuration has an example TOML, config implementation, CLI docs, and doctor behavior covering permissions, shape, reduced PATH, and environment-variable handling.",
+      "reasoning": "Configuration is treated as a first-class concern with defaults, ignored local config, environment-variable/private config guidance, and portable profile separation documented and implemented in config.py.",
       "citation_unverified": false
     },
     {
@@ -62,7 +73,7 @@
       "day1_tell": "A new user completes install \u2192 first successful use from the README alone, no source reading.",
       "tier": "required",
       "status": "covered",
-      "reasoning": "README, setup, contributing, CLI, and packaging tests provide a first-use path and deterministic checks to keep documentation aligned with code.",
+      "reasoning": "README and CLI/setup docs provide installation and first-use paths, and contributing/ops docs reinforce deterministic checks for a new user workflow.",
       "citation_unverified": false
     },
     {
@@ -71,7 +82,7 @@
       "day1_tell": "Run the test suite from a fresh clone with one documented command; confirm it exercises the core path, not just helpers.",
       "tier": "required",
       "status": "covered",
-      "reasoning": "Core runtime tests, setup docs, and roadmap evidence show a documented command exercising workflow/runtime behavior rather than only helper functions.",
+      "reasoning": "The repo has substantial tests across core project, ops, swarm, traces, and documented CI/test expectations, indicating core paths are exercised rather than only helpers.",
       "citation_unverified": false
     },
     {
@@ -79,9 +90,20 @@
       "aliases": "continuous integration / build pipeline / release automation",
       "day1_tell": "Push a failing commit and confirm CI blocks it; push a tag and confirm an artifact is produced.",
       "tier": "required",
-      "status": "covered",
-      "reasoning": "README, release docs, Woodpecker pipeline references, and graphify docs show CI gates and packaging/release artifact validation are part of the workflow.",
-      "citation_unverified": false
+      "status": "partial",
+      "reasoning": "Woodpecker CI is referenced and release/packaging automation exists, but the supplied evidence does not directly show push/tag workflows blocking failing commits and producing artifacts.",
+      "citation_unverified": false,
+      "fix_sites": [
+        {
+          "file": "docs/ROADMAP.md",
+          "what": "Add an explicit CI/CD section describing required Woodpecker pipelines for pushes and tags and the artifact produced by each."
+        },
+        {
+          "file": "README.md",
+          "what": "Link to the CI status and release artifact workflow so users can verify failing commits are blocked and tags build packages."
+        }
+      ],
+      "fix_sites_unverified": false
     },
     {
       "category": "dependency upgrades",
@@ -89,16 +111,16 @@
       "day1_tell": "Confirm dependencies are pinned/lockfiled and an automated update mechanism (or documented cadence) exists.",
       "tier": "required",
       "status": "partial",
-      "reasoning": "The roadmap discusses dependency contracts and pinning in workflow evidence, but the evidence does not show a lockfile or an automated dependency-update cadence for project dependencies.",
+      "reasoning": "Dependency awareness appears in roadmap and code, but the evidence does not establish pinned/locked dependencies or an automated update mechanism/documented cadence.",
       "citation_unverified": false,
       "fix_sites": [
         {
           "file": "docs/ROADMAP.md",
-          "what": "Add the dependency-update policy: lockfile ownership, audit command, update cadence, and who reviews dependency bumps."
+          "what": "Document the dependency pinning/lockfile policy and the cadence or tool used for dependency updates."
         },
         {
-          "file": "docs/SETUP.md",
-          "what": "Document the exact command contributors use to install from the lockfile and verify dependency integrity."
+          "file": "docs/CLI.md",
+          "what": "Add a short operator note explaining how dependency versions are verified for installed releases."
         }
       ],
       "fix_sites_unverified": false
@@ -109,16 +131,16 @@
       "day1_tell": "Run the core operation on a realistic-sized input and confirm latency/memory are measured, not assumed.",
       "tier": "required",
       "status": "partial",
-      "reasoning": "Performance is acknowledged in the roadmap and some tests mention realistic behavior, but the evidence does not demonstrate measured latency/memory budgets for a core operation.",
+      "reasoning": "Performance and cost are acknowledged in roadmap/usage code, but evidence does not show measured latency or memory benchmarks on realistic-sized workflows.",
       "citation_unverified": false,
       "fix_sites": [
         {
           "file": "docs/ROADMAP.md",
-          "what": "Define initial performance budgets for workflow validation/execution, including input size, latency, and memory measurement method."
+          "what": "Add current benchmark targets/results for realistic workflow sizes, including latency, memory, and cost envelopes."
         },
         {
-          "file": "tests/test_packaging.py",
-          "what": "Add or reference a smoke benchmark for the installed CLI on a representative workflow fixture."
+          "file": "src/graph_engineering/usage.py",
+          "what": "Extend usage metrics to record runtime duration and bounded resource measurements where available."
         }
       ],
       "fix_sites_unverified": false
@@ -128,9 +150,20 @@
       "aliases": "security / vulnerability fix / secrets handling / permissions",
       "day1_tell": "Grep for secrets in repo/logs (none), confirm least-privilege defaults, and run a dependency audit clean.",
       "tier": "required",
-      "status": "covered",
-      "reasoning": "Security policy, least-privilege MCP guidance, verify-mcp read-only behavior, and roadmap security/audit language cover sub-type-appropriate hardening.",
-      "citation_unverified": false
+      "status": "partial",
+      "reasoning": "Security policy and least-privilege design are visible, but the evidence does not prove secret scanning and dependency audit are clean or enforced.",
+      "citation_unverified": false,
+      "fix_sites": [
+        {
+          "file": "docs/ROADMAP.md",
+          "what": "Record the required secret-scan and dependency-audit gates and their current pass/fail expectations."
+        },
+        {
+          "file": "SECURITY.md",
+          "what": "Add a maintainer checklist for secret exposure checks and dependency vulnerability audit before release."
+        }
+      ],
+      "fix_sites_unverified": false
     },
     {
       "category": "packaging and installation",
@@ -138,7 +171,7 @@
       "day1_tell": "Install via the documented package-manager path on a clean machine and run the entry point.",
       "tier": "required",
       "status": "covered",
-      "reasoning": "Release docs, packaging tests, changelog, README, and Woodpecker packaging pipeline show clean install and entry-point verification for wheel/sdist artifacts.",
+      "reasoning": "Packaging and clean installation are explicitly tested and release-gated, including wheel/sdist build, isolated install, entry point execution, and Woodpecker packaging CI.",
       "citation_unverified": false
     },
     {
@@ -147,7 +180,7 @@
       "day1_tell": "Confirm released versions are tagged, semver-meaningful, and the running binary reports its version.",
       "tier": "required",
       "status": "covered",
-      "reasoning": "Changelog declares SemVer, release links use version tags, and packaging/runtime tests cover version reporting.",
+      "reasoning": "The changelog declares Semantic Versioning, release tags are referenced, and tests/docs cover running package and contract version reporting.",
       "citation_unverified": false
     },
     {
@@ -156,7 +189,7 @@
       "day1_tell": "Kill a dependency mid-call: confirm bounded timeout, backoff retry, and a clean failure after exhaustion.",
       "tier": "required",
       "status": "covered",
-      "reasoning": "Loop and runtime evidence covers bounded retries, timeouts, no-progress detection, and adversarial failure tests for dependency interruption behavior.",
+      "reasoning": "CLI and runtime evidence includes explicit timeout flags, bounded retry/repair semantics, and tests for runtime and routing behavior under failure.",
       "citation_unverified": false
     },
     {
@@ -165,16 +198,20 @@
       "day1_tell": "Identify what is cached, force staleness, and confirm invalidation works (no permanently wrong answers).",
       "tier": "required",
       "status": "partial",
-      "reasoning": "There are loop tests and public-safety references around cache/report behavior, but the evidence does not establish a clear cache inventory and invalidation contract.",
+      "reasoning": "Loop and CLI tests imply stateful/retry behavior, but the evidence does not clearly identify cache contents, staleness forcing, or invalidation guarantees.",
       "citation_unverified": false,
       "fix_sites": [
         {
-          "file": "docs/ROADMAP.md",
-          "what": "List all persistent caches/reports, their keys, staleness risks, and invalidation triggers."
+          "file": "loops/evidence_loop/loop.py",
+          "what": "Document and expose the exact cached evidence/state keys and the invalidation conditions."
         },
         {
           "file": "loops/tests/test_loop.py",
-          "what": "Add a stale-cache regression test proving changed evidence invalidates any reused loop result."
+          "what": "Add a stale-evidence test proving changed inputs invalidate cached loop decisions."
+        },
+        {
+          "file": "docs/ROADMAP.md",
+          "what": "Clarify whether caching is in scope for the runtime and what correctness invariant prevents stale answers."
         }
       ],
       "fix_sites_unverified": false
@@ -184,20 +221,9 @@
       "aliases": "metrics / monitoring / observability / usage tracking",
       "day1_tell": "Confirm the system emits enough signal (metrics/health/structured logs) to detect it being broken without a user report.",
       "tier": "required",
-      "status": "partial",
-      "reasoning": "The project emphasizes observability and captures token usage/evidence, but there is no clear health/metrics or structured local monitoring contract beyond general diagnostics.",
-      "citation_unverified": false,
-      "fix_sites": [
-        {
-          "file": "docs/ROADMAP.md",
-          "what": "Define the local observability contract: run summaries, failure counters, timing, token/cost fields, and where they are written."
-        },
-        {
-          "file": "config.example.toml",
-          "what": "Add documented knobs for local diagnostics verbosity and telemetry-free run artifact retention."
-        }
-      ],
-      "fix_sites_unverified": false
+      "status": "covered",
+      "reasoning": "For a local developer framework, telemetry is implemented as local usage/metrics and CLI stats rather than phone-home monitoring, with tests and documentation for usage telemetry and derived graph metrics.",
+      "citation_unverified": false
     },
     {
       "category": "authentication and access control",
@@ -205,7 +231,7 @@
       "day1_tell": "Attempt the privileged operation unauthenticated and as a wrong-role user; both must fail safely.",
       "tier": "required",
       "status": "na_by_design",
-      "reasoning": "For this local developer framework, authentication is represented by local profile permissions and capability gates rather than multi-user unauthenticated/wrong-role product access.",
+      "reasoning": "This is a local/keyless developer CLI and framework; sub-type-appropriate authority is profile/tool scope rather than end-user authentication or role login flows.",
       "citation_unverified": false
     },
     {
@@ -214,20 +240,20 @@
       "day1_tell": "Upgrade from a previous-version data dir/schema and confirm data survives; kill -9 mid-write and confirm no corruption.",
       "tier": "required",
       "status": "partial",
-      "reasoning": "State and artifact persistence are present, but the evidence does not show versioned data-dir migration tests or kill-9/atomic-write corruption checks.",
+      "reasoning": "Persistence, lifecycle state, and artifacts are central, but evidence does not show migration tests from previous schema versions or kill-9/atomic-write corruption tests.",
       "citation_unverified": false,
       "fix_sites": [
         {
           "file": "src/graph_engineering/state.py",
-          "what": "Add a persistent schema version and migration entry point for future state upgrades."
+          "what": "Add explicit schema versioning and migration hooks for durable run state."
         },
         {
           "file": "tests/test_artifacts.py",
-          "what": "Add tests for interrupted writes using temp-file/rename semantics to prove artifacts are never partially committed."
+          "what": "Add crash/partial-write regression coverage proving artifact receipts remain valid or fail closed."
         },
         {
-          "file": "docs/CLI.md",
-          "what": "Document where state lives and how upgrades/migrations are handled."
+          "file": "docs/ROADMAP.md",
+          "what": "Document the data migration and crash-consistency guarantees for run state."
         }
       ],
       "fix_sites_unverified": false
@@ -237,20 +263,9 @@
       "aliases": "user interface / usability / display fixes / formatting",
       "day1_tell": "Walk the golden path as a first-time user; confirm empty states, long values, and errors all render intentionally.",
       "tier": "required",
-      "status": "partial",
-      "reasoning": "CLI and skill validation docs address user-facing flows, but the evidence does not show explicit empty-state, long-output, or error-rendering polish tests for first-time CLI use.",
-      "citation_unverified": false,
-      "fix_sites": [
-        {
-          "file": "docs/CLI.md",
-          "what": "Add examples of empty config, invalid workflow, long values, and actionable error output."
-        },
-        {
-          "file": "ops/tests/test_graph_task_mcp.py",
-          "what": "Add golden-output tests for common user-facing failure messages."
-        }
-      ],
-      "fix_sites_unverified": false
+      "status": "covered",
+      "reasoning": "For a CLI/toolkit, UX polish maps to command behavior, help/error surfaces, safety messages, and contributor-visible workflow docs, all represented in CLI tests and docs.",
+      "citation_unverified": false
     },
     {
       "category": "internationalization",
@@ -258,16 +273,16 @@
       "day1_tell": "Feed non-ASCII input end-to-end (CJK, emoji, RTL) and confirm no mangling; locale strings externalized if user-facing.",
       "tier": "required",
       "status": "gap",
-      "reasoning": "The keyword search found no internationalization/localization evidence, and for this CLI sub-type the relevant missing capability is explicit Unicode/non-ASCII end-to-end handling tests.",
+      "reasoning": "No evidence mentions internationalization, localization, translations, or Unicode/non-ASCII handling, so the sub-type-relevant Unicode data path is unproven.",
       "citation_unverified": false,
       "fix_sites": [
         {
           "file": "tests/test_cli.py",
-          "what": "Add a workflow/task/output test containing CJK text, emoji, and RTL text and assert JSON/CLI output preserves it."
+          "what": "Add an end-to-end CLI test using CJK, emoji, and RTL text in workflow/project inputs and assert JSON/output round-trips without mangling."
         },
         {
-          "file": "src/graph_engineering/runtime.py",
-          "what": "Ensure all persisted and subprocess-exchanged text uses UTF-8 and does not ASCII-escape or corrupt Unicode."
+          "file": "docs/CLI.md",
+          "what": "Document UTF-8 input/output expectations and terminal/JSON encoding behavior."
         }
       ],
       "fix_sites_unverified": false,
@@ -279,20 +294,20 @@
       "day1_tell": "Run a soak loop and confirm stable handles/memory; SIGTERM mid-work and confirm graceful shutdown.",
       "tier": "required",
       "status": "partial",
-      "reasoning": "MCP server and contract evidence suggest resource-managed operations, but there is no explicit soak/SIGTERM cleanup proof for handles, processes, or worktrees.",
+      "reasoning": "The design uses scoped worktrees, SQLite state, and bounded execution, but the evidence does not show soak-loop resource stability or SIGTERM cleanup behavior.",
       "citation_unverified": false,
       "fix_sites": [
         {
-          "file": "src/graph_engineering/mcp/server.py",
-          "what": "Add graceful shutdown handling that closes subprocesses, streams, and temporary resources on SIGTERM."
+          "file": "src/graph_engineering/cli.py",
+          "what": "Add SIGTERM/SIGINT handling that closes stores, terminates child processes, and records an interrupted lifecycle event."
         },
         {
-          "file": "tests/test_mcp_protocol.py",
-          "what": "Add a shutdown test proving in-flight protocol resources are cleaned up deterministically."
+          "file": "tests/test_contracts.py",
+          "what": "Add cleanup tests for interrupted runs ensuring temp worktrees/files and subprocesses are not leaked."
         },
         {
-          "file": "docs/MCP.md",
-          "what": "Document server lifecycle and cleanup behavior for cancellation and termination."
+          "file": "docs/ROADMAP.md",
+          "what": "Add a resource-cleanup acceptance criterion covering soak runs and signal interruption."
         }
       ],
       "fix_sites_unverified": false
@@ -303,7 +318,7 @@
       "day1_tell": "Find the documented vulnerability-reporting channel (SECURITY.md) and confirm a reporter could use it without filing a public issue.",
       "tier": "required",
       "status": "covered",
-      "reasoning": "SECURITY.md provides a private vulnerability-reporting path and explicitly tells reporters not to open public issues for vulnerabilities or secrets.",
+      "reasoning": "SECURITY.md clearly tells reporters not to open public issues and to use GitHub private vulnerability reporting or the configured security contact.",
       "citation_unverified": false
     },
     {
@@ -312,7 +327,7 @@
       "day1_tell": "Confirm a LICENSE file exists and the package metadata declares the same license.",
       "tier": "required",
       "status": "covered",
-      "reasoning": "Release gate and packaging tests check license files and metadata consistency, while NOTICE records provenance obligations.",
+      "reasoning": "Release gate requires license files, packaging tests inspect metadata, and NOTICE/roadmap document MIT licensing and provenance obligations.",
       "citation_unverified": false
     },
     {
@@ -321,7 +336,7 @@
       "day1_tell": "From CONTRIBUTING.md alone, a new contributor can set up, run tests, and submit a change.",
       "tier": "required",
       "status": "covered",
-      "reasoning": "CONTRIBUTING.md, README, setup references, and subagent docs provide contributor setup, deterministic testing expectations, and change/release rules.",
+      "reasoning": "CONTRIBUTING.md provides setup/change expectations and links release rules, while README/pyproject/CI evidence supports contributor test and submission workflow.",
       "citation_unverified": false
     },
     {
@@ -330,16 +345,16 @@
       "day1_tell": "Open the changelog: latest release has a dated, sectioned entry that calls out breaking changes separately.",
       "tier": "required",
       "status": "partial",
-      "reasoning": "The changelog follows Keep a Changelog/SemVer and has release links, but the evidence excerpt only shows an Unreleased section and links, not a dated sectioned latest release entry with breaking-change treatment.",
+      "reasoning": "A changelog exists with SemVer and release links, but the evidence only shows an alpha release entry area and does not prove dated sectioned notes with breaking changes called out separately for the latest release.",
       "citation_unverified": false,
       "fix_sites": [
         {
           "file": "CHANGELOG.md",
-          "what": "Add or verify a dated latest-release section with standard subsections and an explicit Breaking Changes subsection when applicable."
+          "what": "Ensure each release has a dated section with standard subsections and an explicit Breaking Changes subsection, even when empty."
         },
         {
-          "file": "ops/release_gate.py",
-          "what": "Fail release if the current version lacks a dated changelog heading and required section structure."
+          "file": "docs/RELEASING.md",
+          "what": "Add a release-gate checklist item requiring dated changelog entries and separate breaking-change notes."
         }
       ],
       "fix_sites_unverified": false
@@ -349,20 +364,9 @@
       "aliases": "lint / linter / static analysis / formatter / type checking in CI",
       "day1_tell": "Run the project's lint/typecheck command locally and confirm CI enforces the same check.",
       "tier": "required",
-      "status": "partial",
-      "reasoning": "Static validation, lint/types, and CI enforcement are described in roadmap-like evidence, but the concrete local lint/typecheck command and CI parity are not clearly visible in the cited evidence.",
-      "citation_unverified": false,
-      "fix_sites": [
-        {
-          "file": "docs/SETUP.md",
-          "what": "Document the exact lint, format, and typecheck commands contributors must run locally."
-        },
-        {
-          "file": ".woodpecker/core-components.yml",
-          "what": "Ensure the CI pipeline invokes the same lint/typecheck command documented for local use."
-        }
-      ],
-      "fix_sites_unverified": false
+      "status": "covered",
+      "reasoning": "Static validation, lint/type expectations, verify-mcp checks, and CI/release enforcement are documented and represented in source/tests.",
+      "citation_unverified": false
     },
     {
       "category": "release integrity and provenance",
@@ -370,37 +374,39 @@
       "day1_tell": "Download a release artifact and verify its checksum or signature by the documented method.",
       "tier": "optional",
       "status": "partial",
-      "reasoning": "The evidence shows SHA-256 digest computation and apparent digest checking in runtime/artifact-related code, which supports some artifact integrity checking. However, it does not demonstrate a documented release-artifact verification method, published checksums, signatures, or provenance for downloadable releases. Therefore it is not fully covered for release integrity/provenance.",
+      "reasoning": "Release artifacts are linked and provenance is discussed, but documented checksum/signature verification for downloaded artifacts is not shown in the evidence.",
       "citation_unverified": false,
-      "fix_sites": [],
-      "fix_sites_unverified": true,
-      "escalated": true,
-      "pre_escalation_reasoning": "Release integrity is optional but applicable, and the evidence shows it is planned rather than documented with downloadable checksums or signatures."
+      "fix_sites": [
+        {
+          "file": "docs/RELEASING.md",
+          "what": "Document the checksum or signature generation and verification commands for release artifacts."
+        },
+        {
+          "file": "README.md",
+          "what": "Add a short verification step next to the wheel download command using the published checksum/signature."
+        }
+      ],
+      "fix_sites_unverified": false
     },
     {
       "category": "SBOM and supply-chain transparency",
       "aliases": "SBOM / software bill of materials / dependency disclosure",
       "day1_tell": "Generate or locate the published SBOM for the latest release.",
       "tier": "optional",
-      "status": "gap",
-      "reasoning": "SBOM and supply-chain transparency are optional but applicable to published packages, and the roadmap only lists SBOM generation as future work.",
+      "status": "partial",
+      "reasoning": "SBOM generation is listed as a roadmap/release goal, but there is no evidence of an existing generated or published SBOM for the latest release.",
       "citation_unverified": false,
       "fix_sites": [
         {
+          "file": "docs/ROADMAP.md",
+          "what": "Mark SBOM generation as an implemented release gate only when a concrete SBOM artifact path and tool are added."
+        },
+        {
           "file": "docs/RELEASING.md",
-          "what": "Add the command and publication location for the release SBOM."
-        },
-        {
-          "file": "ops/release_gate.py",
-          "what": "Generate an SBOM as part of the release gate and include it with artifacts."
-        },
-        {
-          "file": "NOTICE.md",
-          "what": "Cross-reference the SBOM as the machine-readable dependency/provenance companion to retained notices."
+          "what": "Add the SBOM generation command and publication location for each release."
         }
       ],
-      "fix_sites_unverified": false,
-      "escalated": true
+      "fix_sites_unverified": false
     },
     {
       "category": "fuzzing and property-based testing",
@@ -408,16 +414,16 @@
       "day1_tell": "Find a fuzz or property-based target exercising the main parser/input boundary; run it briefly.",
       "tier": "optional",
       "status": "gap",
-      "reasoning": "Fuzzing/property-based testing is optional but relevant to workflow/parser boundaries, and the evidence contains only general testing/roadmap references with no fuzz/property target.",
+      "reasoning": "The evidence shows tests and validation docs but no fuzzing or property-based target for the main workflow/parser/input boundaries.",
       "citation_unverified": false,
       "fix_sites": [
         {
-          "file": "tests/test_cli.py",
-          "what": "Add property-style cases or a fuzz harness for workflow/config JSON/TOML parsing boundaries."
+          "file": "docs/ROADMAP.md",
+          "what": "Add fuzz/property-based parser testing as a concrete quality gate with target inputs and runtime budget."
         },
         {
-          "file": "docs/SETUP.md",
-          "what": "Document how to run the parser fuzz/property test briefly during hardening work."
+          "file": "traces/README.md",
+          "what": "Document any trace/workflow corpus or generator used for randomized parser and analyzer testing."
         }
       ],
       "fix_sites_unverified": false,
@@ -429,20 +435,20 @@
       "day1_tell": "Trigger a deprecated path: it warns with the removal version and a migration pointer; an upgrade guide exists.",
       "tier": "optional",
       "status": "partial",
-      "reasoning": "Deprecation and migration are mentioned conceptually for MCP and setup, but there is no explicit deprecated-path behavior with warning, removal version, and migration pointer.",
+      "reasoning": "Migration and protocol-breaking changes are discussed, but evidence does not show a formal deprecation policy with warnings, removal versions, and migration pointers in code paths.",
       "citation_unverified": false,
       "fix_sites": [
         {
-          "file": "docs/SETUP.md",
-          "what": "Add a deprecation policy covering warning format, removal version, and migration-guide expectations."
+          "file": "docs/ROADMAP.md",
+          "what": "Add a deprecation policy requiring warning text, removal version, and migration link for any deprecated CLI/schema path."
         },
         {
-          "file": "src/graph_engineering/state.py",
-          "what": "When loading older state/schema paths, emit structured deprecation warnings with removal version and migration instructions."
+          "file": "src/graph_engineering/project.py",
+          "what": "Introduce a standard deprecation warning helper for old project/schema fields with removal-version metadata."
         },
         {
-          "file": "CHANGELOG.md",
-          "what": "Reserve a Breaking/Deprecated subsection for every release that introduces a deprecated path."
+          "file": "README.md",
+          "what": "Link to an upgrade/deprecation section for users crossing breaking protocol or schema changes."
         }
       ],
       "fix_sites_unverified": false
@@ -453,16 +459,20 @@
       "day1_tell": "Find documentation of what data is collected/stored and a working opt-out for any telemetry.",
       "tier": "optional",
       "status": "partial",
-      "reasoning": "Security and roadmap evidence stress private prompts/secrets and local configuration, but there is no dedicated privacy/data-handling disclosure or opt-out statement for telemetry-like data.",
+      "reasoning": "Local usage telemetry is present and release-gated, but the evidence does not show a privacy/data-handling disclosure or opt-out behavior for collected local telemetry.",
       "citation_unverified": false,
       "fix_sites": [
         {
-          "file": "SECURITY.md",
-          "what": "Add a data-handling section describing what run artifacts, prompts, environment names, and diagnostics are stored locally and what is never collected."
+          "file": "docs/CLI.md",
+          "what": "Document exactly what usage data is stored locally, where it is stored, retention expectations, and how to disable or delete it."
         },
         {
-          "file": "docs/CLI.md",
-          "what": "Document any diagnostic/run-artifact retention controls and explicitly state whether the tool phones home or how to opt out if telemetry is added."
+          "file": "src/graph_engineering/cli.py",
+          "what": "Add or document a no-usage-telemetry option/env var and ensure stats commands report the current telemetry setting."
+        },
+        {
+          "file": "src/graph_engineering/capabilities.py",
+          "what": "Expose the telemetry opt-out capability/state in the capability manifest."
         }
       ],
       "fix_sites_unverified": false
