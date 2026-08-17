@@ -306,9 +306,11 @@ def test_resume_polls_persisted_task_without_duplicate_send_after_disconnect(
                 config(base).profiles["remote"],
                 request(tmp_path),
                 environ={"A2A_TEST_TOKEN": remote.auth},
-                limits=ExecutionLimits(timeout_seconds=0.15, max_stdout_bytes=4096),
+                limits=ExecutionLimits(timeout_seconds=1, max_stdout_bytes=4096),
             )
         assert caught.value.code == "A2A_TIMEOUT"
+        # intent: prove the simulated disconnect occurred before testing durable resume.
+        assert remote.gets >= 1 and not remote.disconnect_get_once
         remote.status = "TASK_STATE_COMPLETED"
         result = execute(base, remote, request(tmp_path))
     assert result.value == {"answer": "accepted"}

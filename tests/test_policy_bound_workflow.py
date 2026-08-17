@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -285,6 +286,7 @@ def _runtime(
         state_path=repo / "state.sqlite",
         artifact_root=repo / "artifacts",
         approvals=approvals,
+        environ=os.environ | {"TMPDIR": str(repo.parent)},
     )
 
 
