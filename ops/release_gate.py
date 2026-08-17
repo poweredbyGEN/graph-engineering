@@ -397,7 +397,9 @@ def assert_installed_capabilities(output: str, expected_version: str) -> None:
     if manifest.get("features", {}).get("task_specific_selection") is not True:
         raise GateError("installed capability manifest omits task-specific selection")
     if manifest.get("features", {}).get("evidence_gated_durable_promotion") is not True:
-        raise GateError("installed capability manifest omits durable promotion evidence")
+        raise GateError(
+            "installed capability manifest omits durable promotion evidence"
+        )
 
 
 def build_and_smoke(scratch: Path) -> tuple[Path, Path]:

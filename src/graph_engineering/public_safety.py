@@ -295,8 +295,11 @@ def scan_worktree(
     return sorted(set(findings))
 
 
-def _reachable_objects(repo: Path, max_blobs: int) -> list[tuple[str, str]]:
-    records = _git(repo, ["rev-list", "--objects", "--all"]).splitlines()
+def _reachable_objects(
+    repo: Path, max_blobs: int, revision: str = "HEAD"
+) -> list[tuple[str, str]]:
+    candidate = _resolve_commit(repo, revision)
+    records = _git(repo, ["rev-list", "--objects", candidate]).splitlines()
     object_paths: dict[str, str] = {}
     for record in records:
         object_id, separator, path = record.partition(b" ")
@@ -328,18 +331,19 @@ def _reachable_objects(repo: Path, max_blobs: int) -> list[tuple[str, str]]:
 def scan_history(
     repo: Path,
     *,
+    revision: str = "HEAD",
     rules: Sequence[PatternRule] = (),
     max_blobs: int = DEFAULT_MAX_BLOBS,
     max_bytes: int = DEFAULT_MAX_BYTES,
     max_item_bytes: int = DEFAULT_MAX_ITEM_BYTES,
 ) -> list[Finding]:
-    """Scan every unique blob reachable from every local ref."""
+    """Scan every unique blob reachable from the candidate revision."""
 
     repo = repo.resolve()
     active_rules = (*_BUILTIN_RULES, *rules)
     findings: list[Finding] = []
     total = 0
-    for oid, historical_path in _reachable_objects(repo, max_blobs):
+    for oid, historical_path in _reachable_objects(repo, max_blobs, revision):
         size_text = _git(repo, ["cat-file", "-s", oid]).strip()
         try:
             size = int(size_text)

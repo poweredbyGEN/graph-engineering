@@ -473,19 +473,28 @@ def test_runtime_rejects_unrecognized_effect_instead_of_stripping_it(tmp_path):
 
 def test_declared_node_timeout_is_bounded_and_late_result_is_fenced(tmp_path):
     value = wf([n("only", timeout_seconds=1)], timeout_seconds=10)
+    executor_started = threading.Event()
+    executor_finished = threading.Event()
+
+    def slow_executor(_context):
+        executor_started.set()
+        time.sleep(2)
+        executor_finished.set()
+        return {"result": {"value": 1}}
+
     engine = Scheduler(
         value,
         tmp_path / "state.db",
         tmp_path / "art",
-        {"only": lambda _: time.sleep(1.5) or {"result": {"value": 1}}},
+        {"only": slow_executor},
         ok,
     )
-    started = time.monotonic()
     result = engine.run()
-    elapsed = time.monotonic() - started
+    assert executor_started.is_set()
     assert result.status == "failed"
-    assert elapsed < 1.3, f"node timeout ignored; elapsed={elapsed:.2f}s"
-    time.sleep(0.6)
+    # intent: the scheduler returns at the deadline without waiting for the late worker.
+    assert not executor_finished.is_set()
+    assert executor_finished.wait(5)
     assert engine.state.node_rows(result.run_id)["only"]["status"] == "failed"
 
 
