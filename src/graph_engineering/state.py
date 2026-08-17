@@ -120,6 +120,19 @@ MIGRATIONS = (
       created_at REAL NOT NULL
     );
     """,
+    """
+    CREATE TABLE route_states (
+      run_id TEXT NOT NULL REFERENCES runs(id), node_id TEXT NOT NULL,
+      source_digest TEXT NOT NULL, matched INTEGER NOT NULL, decided_at REAL NOT NULL,
+      PRIMARY KEY (run_id, node_id)
+    );
+    CREATE TABLE loop_states (
+      run_id TEXT NOT NULL REFERENCES runs(id), controller_node TEXT NOT NULL,
+      iterations INTEGER NOT NULL DEFAULT 0, last_controller_attempt INTEGER NOT NULL DEFAULT 0,
+      matched INTEGER NOT NULL DEFAULT 0, updated_at REAL NOT NULL,
+      PRIMARY KEY (run_id, controller_node)
+    );
+    """,
 )
 
 _MIGRATION_LOCK = threading.Lock()
@@ -238,6 +251,181 @@ class StateStore:
             )
             connection.commit()
         return run_id
+
+    def record_route_decision(
+        self,
+        run_id: str,
+        node_id: str,
+        source_digest: str,
+        matched: bool,
+        lease: RunLease,
+    ) -> bool:
+        """Persist a conditional edge decision and skip its target when false."""
+
+        now = time.time()
+        with self._write_lock, self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._assert_lease(connection, lease)
+            prior = connection.execute(
+                "SELECT source_digest,matched FROM route_states WHERE run_id=? AND node_id=?",
+                (run_id, node_id),
+            ).fetchone()
+            if prior is not None:
+                if (
+                    prior["source_digest"] != source_digest
+                    or bool(prior["matched"]) != matched
+                ):
+                    connection.rollback()
+                    raise RuntimeError(
+                        f"persisted route decision for {node_id!r} changed"
+                    )
+                connection.commit()
+                return bool(prior["matched"])
+            row = connection.execute(
+                "SELECT status,attempt_count FROM nodes WHERE run_id=? AND node_id=?",
+                (run_id, node_id),
+            ).fetchone()
+            if row is None or row["status"] != "pending":
+                connection.rollback()
+                raise RuntimeError(f"route target {node_id!r} is not pending")
+            connection.execute(
+                "INSERT INTO route_states VALUES(?,?,?,?,?)",
+                (run_id, node_id, source_digest, int(matched), now),
+            )
+            if not matched:
+                connection.execute(
+                    "UPDATE nodes SET status='skipped',error='conditional route not selected' "
+                    "WHERE run_id=? AND node_id=? AND status='pending'",
+                    (run_id, node_id),
+                )
+                append_event_connection(
+                    connection,
+                    run_id,
+                    f"route:{node_id}:{source_digest}",
+                    "route.decided",
+                    node_id=node_id,
+                    payload={"matched": False, "source_digest": source_digest},
+                    created_at=now,
+                )
+            else:
+                append_event_connection(
+                    connection,
+                    run_id,
+                    f"route:{node_id}:{source_digest}",
+                    "route.decided",
+                    node_id=node_id,
+                    payload={"matched": True, "source_digest": source_digest},
+                    created_at=now,
+                )
+            connection.commit()
+        return matched
+
+    def apply_loop_decision(
+        self,
+        run_id: str,
+        controller_node: str,
+        controller_attempt: int,
+        matched: bool,
+        max_iterations: int,
+        region: tuple[str, ...],
+        lease: RunLease,
+    ) -> str:
+        """Checkpoint one loop decision and atomically reopen its static region."""
+
+        now = time.time()
+        with self._write_lock, self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._assert_lease(connection, lease)
+            prior = connection.execute(
+                "SELECT iterations,last_controller_attempt,matched FROM loop_states "
+                "WHERE run_id=? AND controller_node=?",
+                (run_id, controller_node),
+            ).fetchone()
+            if (
+                prior is not None
+                and int(prior["last_controller_attempt"]) == controller_attempt
+            ):
+                connection.commit()
+                if not bool(prior["matched"]):
+                    return "complete"
+                return (
+                    "continued"
+                    if int(prior["iterations"]) < max_iterations
+                    else "exhausted"
+                )
+            if (
+                prior is not None
+                and int(prior["last_controller_attempt"]) > controller_attempt
+            ):
+                connection.rollback()
+                raise RuntimeError("loop checkpoint is ahead of controller attempt")
+            iterations = 1 if prior is None else int(prior["iterations"]) + 1
+            connection.execute(
+                "INSERT INTO loop_states VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(run_id,controller_node) DO UPDATE SET "
+                "iterations=excluded.iterations,last_controller_attempt=excluded.last_controller_attempt,"
+                "matched=excluded.matched,updated_at=excluded.updated_at",
+                (
+                    run_id,
+                    controller_node,
+                    iterations,
+                    controller_attempt,
+                    int(matched),
+                    now,
+                ),
+            )
+            outcome = "complete"
+            if matched and iterations >= max_iterations:
+                outcome = "exhausted"
+                connection.execute(
+                    "DELETE FROM artifacts WHERE run_id=? AND node_id=?",
+                    (run_id, controller_node),
+                )
+                connection.execute(
+                    "UPDATE nodes SET status='failed',error='bounded loop iteration ceiling reached' "
+                    "WHERE run_id=? AND node_id=? AND status='succeeded'",
+                    (run_id, controller_node),
+                )
+            elif matched:
+                outcome = "continued"
+                placeholders = ",".join("?" for _ in region)
+                parameters = (run_id, *region)
+                connection.execute(
+                    f"DELETE FROM artifacts WHERE run_id=? AND node_id IN ({placeholders})",
+                    parameters,
+                )
+                connection.execute(
+                    f"DELETE FROM route_states WHERE run_id=? AND node_id IN ({placeholders})",
+                    parameters,
+                )
+                connection.execute(
+                    f"UPDATE nodes SET status='pending',error='bounded loop iteration scheduled',"
+                    f"active_attempt=NULL,active_generation=NULL WHERE run_id=? AND node_id IN ({placeholders})",
+                    parameters,
+                )
+                connection.execute(
+                    f"UPDATE node_progress SET decision='continue',reason='bounded loop iteration scheduled' "
+                    f"WHERE run_id=? AND node_id IN ({placeholders})",
+                    parameters,
+                )
+            append_event_connection(
+                connection,
+                run_id,
+                f"loop:{controller_node}:{controller_attempt}",
+                "loop.decided",
+                node_id=controller_node,
+                attempt=controller_attempt,
+                payload={
+                    "matched": matched,
+                    "iteration": iterations,
+                    "max_iterations": max_iterations,
+                    "outcome": outcome,
+                    "region": list(region),
+                },
+                created_at=now,
+            )
+            connection.commit()
+        return outcome
 
     def create_fork_run(
         self,

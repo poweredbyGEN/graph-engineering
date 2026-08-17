@@ -381,6 +381,29 @@ def test_grok_json_envelope_extracts_text_result():
     assert len(events) == 1
 
 
+def test_provider_usage_is_persisted_in_execution_receipt(tmp_path: Path):
+    # intent: graph economics must come from durable provider receipts, not estimates.
+    script = executable(
+        tmp_path / "usage.py",
+        """
+import json
+print(json.dumps({
+    'text': '{"answer":"measured"}',
+    'usage': {'input_tokens': 17, 'output_tokens': 5, 'cost_usd': 0.001234},
+}))
+""",
+    )
+
+    result = execute_profile(
+        profile(script), request(tmp_path), environ=environment(tmp_path)
+    )
+
+    assert result.value == {"answer": "measured"}
+    assert result.receipt.input_tokens == 17
+    assert result.receipt.output_tokens == 5
+    assert result.receipt.cost_microusd == 1234
+
+
 def test_grok_streaming_json_assembles_only_text_data_events():
     raw = b"\n".join(
         [

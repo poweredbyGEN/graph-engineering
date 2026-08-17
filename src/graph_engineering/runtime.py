@@ -18,6 +18,7 @@ from typing import Any, ClassVar
 from jsonschema import Draft202012Validator
 
 from .artifacts import ArtifactError, ArtifactStore, canonical_json
+from .builtins import BuiltinOperationError, evaluate_predicate
 from .contracts import validate_workflow
 from .state import (
     ProgressBudgetExpiredError,
@@ -138,6 +139,7 @@ class Scheduler:
         "blocked",
         "cancelled",
         "uncertain",
+        "skipped",
     }
 
     def __init__(
@@ -206,6 +208,107 @@ class Scheduler:
             inputs[name] = self.artifacts.get(record["digest"], schema).value
         return inputs
 
+    def _artifact_value(self, run_id: str, binding: str) -> tuple[Any, str]:
+        producer, output = binding.split(".", 1)
+        record = self.state.artifact(run_id, producer, output)
+        if record is None:
+            raise ArtifactError(f"route source {binding!r} has no accepted artifact")
+        schema = json.loads(record["schema_json"])
+        return self.artifacts.get(record["digest"], schema).value, str(record["digest"])
+
+    @staticmethod
+    def _path_value(value: Any, path: list[str | int]) -> Any:
+        current = value
+        for component in path:
+            if isinstance(component, int):
+                if not isinstance(current, list) or component >= len(current):
+                    raise BuiltinOperationError(
+                        f"route path component {component!r} is unavailable"
+                    )
+                current = current[component]
+            else:
+                if not isinstance(current, Mapping) or component not in current:
+                    raise BuiltinOperationError(
+                        f"route path component {component!r} is unavailable"
+                    )
+                current = current[component]
+        return current
+
+    def _process_conditional_routes(
+        self, run_id: str, rows: Mapping[str, Mapping[str, Any]], lease: RunLease
+    ) -> None:
+        for node_id, node in sorted(self.nodes.items()):
+            route = node.get("route")
+            if route is None or rows[node_id]["status"] != "pending":
+                continue
+            producer = route["source"].partition(".")[0]
+            if rows[producer]["status"] != "succeeded":
+                continue
+            try:
+                value, digest = self._artifact_value(run_id, route["source"])
+                selected = self._path_value(value, route.get("path", []))
+                matched = evaluate_predicate(selected, route["predicate"])
+                self.state.record_route_decision(
+                    run_id, node_id, digest, matched, lease
+                )
+            except Exception as exc:  # noqa: BLE001 - a malformed route fails closed
+                self.state.set_node_status(
+                    run_id, node_id, "failed", f"conditional route failed: {exc}", lease
+                )
+
+    def _loop_region(self, controller_id: str, target_id: str) -> tuple[str, ...]:
+        def ancestors(node_id: str) -> set[str]:
+            result: set[str] = set()
+            pending = list(self.nodes[node_id].get("needs", ()))
+            while pending:
+                current = pending.pop()
+                if current in result:
+                    continue
+                result.add(current)
+                pending.extend(self.nodes[current].get("needs", ()))
+            return result
+
+        controller_ancestors = ancestors(controller_id)
+        region = {
+            node_id
+            for node_id in self.nodes
+            if node_id in {target_id, controller_id}
+            or (target_id in ancestors(node_id) and node_id in controller_ancestors)
+        }
+        return tuple(sorted(region))
+
+    def _process_loops(
+        self, run_id: str, rows: Mapping[str, Mapping[str, Any]], lease: RunLease
+    ) -> None:
+        for controller_id, node in sorted(self.nodes.items()):
+            loop = node.get("loop")
+            row = rows[controller_id]
+            if loop is None or row["status"] != "succeeded":
+                continue
+            try:
+                value, _digest = self._artifact_value(
+                    run_id, f"{controller_id}.{loop['output']}"
+                )
+                selected = self._path_value(value, loop.get("path", []))
+                matched = evaluate_predicate(selected, loop["predicate"])
+                self.state.apply_loop_decision(
+                    run_id,
+                    controller_id,
+                    int(row["attempt_count"]),
+                    matched,
+                    int(loop["max_iterations"]),
+                    self._loop_region(controller_id, loop["target"]),
+                    lease,
+                )
+            except Exception as exc:  # noqa: BLE001 - a control failure cannot advance
+                self.state.set_node_status(
+                    run_id,
+                    controller_id,
+                    "failed",
+                    f"bounded loop failed: {exc}",
+                    lease,
+                )
+
     def _join_snapshot(
         self, node: Mapping[str, Any], rows: Mapping[str, Mapping[str, Any]]
     ) -> dict[str, Any] | None:
@@ -242,7 +345,7 @@ class Scheduler:
         if policy == "all":
             required_failure = any(
                 settlements[dependency]
-                in {"failed", "blocked", "cancelled", "uncertain"}
+                in {"failed", "blocked", "cancelled", "uncertain", "skipped"}
                 or (
                     settlements[dependency] == "optional_failed"
                     and bool(rows[dependency]["required"])
@@ -867,6 +970,10 @@ class Scheduler:
                     if failure is not None and isinstance(digest, str):
                         self._try_repair(run_id, node, failure, digest, lease)
                 rows = self.state.node_rows(run_id)
+                self._process_loops(run_id, rows, lease)
+                rows = self.state.node_rows(run_id)
+                self._process_conditional_routes(run_id, rows, lease)
+                rows = self.state.node_rows(run_id)
 
                 # Keep unused quorum members as reserves while the decision is unknown. Once
                 # the threshold becomes terminal, claim those members before freezing the
@@ -935,6 +1042,16 @@ class Scheduler:
                             node_id,
                             "blocked",
                             "a required dependency did not succeed",
+                            lease,
+                        )
+                    elif any(
+                        dependency["status"] == "skipped" for dependency in dependencies
+                    ):
+                        self.state.set_node_status(
+                            run_id,
+                            node_id,
+                            "skipped",
+                            "conditional dependency was not selected",
                             lease,
                         )
 
@@ -1014,6 +1131,15 @@ class Scheduler:
                     )
                     progressed = True
 
+                # A controller completion can close the apparent DAG while opening a
+                # bounded loop-back edge. Checkpoint that decision before terminal-state
+                # reduction so a fast final controller cannot bypass its declared loop.
+                if progressed:
+                    control_rows = self.state.node_rows(run_id)
+                    self._process_loops(run_id, control_rows, lease)
+                    control_rows = self.state.node_rows(run_id)
+                    self._process_conditional_routes(run_id, control_rows, lease)
+
                 if active:
                     if not progressed:
                         next_deadline = min(entry.deadline for entry in active.values())
@@ -1049,7 +1175,8 @@ class Scheduler:
                             run_id, "cancelled", self.state.node_rows(run_id)
                         )
                     required_bad = any(
-                        bool(row["required"]) and row["status"] != "succeeded"
+                        bool(row["required"])
+                        and row["status"] not in {"succeeded", "skipped"}
                         for row in rows.values()
                     )
                     status = "failed" if required_bad else "succeeded"

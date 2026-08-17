@@ -89,6 +89,28 @@ def test_history_scans_unique_reachable_blobs_after_secret_is_deleted(
     )
 
 
+def test_history_scan_does_not_inherit_findings_from_unrelated_branch(
+    tmp_path: Path,
+) -> None:
+    repo = make_repo(tmp_path)
+    commit(repo, "base.txt", b"public base\n")
+    safe_branch = subprocess.run(
+        ["git", "-C", str(repo), "branch", "--show-current"],
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout.strip()
+    git(repo, "checkout", "-qb", "unsafe")
+    commit(repo, "private.txt", b"path=/" + b"root" + b"/private/project\n")
+    git(repo, "checkout", "-q", safe_branch)
+    commit(repo, "candidate.txt", b"safe candidate\n")
+
+    # intent: an unrelated fetched branch must not poison a safe release candidate.
+    assert scan_history(repo) == []
+    git(repo, "checkout", "-q", "unsafe")
+    assert "absolute-user-home" in {finding.rule for finding in scan_history(repo)}
+
+
 @pytest.mark.parametrize(
     ("content", "rule"),
     [

@@ -75,16 +75,34 @@ The live hostname and canonical repository root must match immediately before di
 state, lifecycle context, status, and handoff store only the canonical binding digest, never the
 configured hostname or paths.
 
-## Adopt an existing or new project
+## Choose the smallest execution mode
 
-Start read-only, then initialize only when the task earns graph overhead:
+Selection is task-specific and defaults to `LINEAR`; repository ceremony is not an execution
+prerequisite:
+
+```bash
+graph-engineer choose --brief task-brief.json --repo "$PWD" --focus-path src/api --json
+graph-engineer execute --brief task-brief.json --json
+```
+
+`TRANSIENT_GRAPH` requires at least two independent lanes, both cost estimates, and a forecast
+latency gain of at least 10%. `DURABLE_GRAPH` additionally requires a real durability need
+(long-running, resumable, or effectful) or an exact-digest named review of promotion evidence.
+Graphify may supply bounded dependency evidence only for explicit Git-tracked focus paths when its
+manifest is fresh; node count never earns a graph. `execute` emits a host dispatch contract for
+linear/transient work and does not pretend to launch a private scheduler. Durable work continues
+through the reviewed `run` boundary.
+
+## Adopt a recurring durable workflow
+
+Initialize only after the task earns durable graph overhead:
 
 ```bash
 graph-engineer assess --repo "$PWD" --json
 graph-engineer init --repo "$PWD" --json
 ```
 
-`init` discovers the repository root, its checked-in graph project boundary, reviewed JSON
+`assess` remains advisory repository evidence. `init` discovers the repository root, its checked-in graph project boundary, reviewed JSON
 workflows, private-profile readiness, and matching durable runs. If the boundary is absent, it
 scaffolds the minimal public files and returns them for review; complete the frozen product
 contract, allowed write roots, required/live deterministic checks, and any sanctioned deployment
@@ -133,6 +151,23 @@ revalidates source/contract/repository bindings, writes the new acceptance recei
 then creates the new workflow; neither command overwrites an existing artifact. A raw candidate is
 never a reviewed graph.
 
+## Record economics and earn durable promotion
+
+```bash
+graph-engineer outcome --input measured-outcome.json --json
+graph-engineer promote --evidence matched-outcomes.json --output promotion.json --json
+graph-engineer choose --brief task-brief.json --promotion matched-outcomes.json \
+  --promotion-reviewed-by release-owner --promotion-digest '<exact digest>' --json
+```
+
+Outcome records include input/output tokens, cost, model, verifier decisions and overturns, cold
+adoption time, integration failures, escaped defects, failure class, and merge/deploy/live proof
+time. Provider-reported tokens and cost are also persisted in immutable execution receipts; a
+policy-bound run fails when reported usage exceeds its reviewed ceiling. Promotion requires at
+least three accepted, equal-suite, matched LINEAR/TRANSIENT_GRAPH runs that win the declared
+latency, quality, or cost objective without worsening escaped defects. Eligibility still requires
+a named reviewer bound to the exact evidence digest.
+
 ## Validate and inspect topology
 
 ```bash
@@ -145,6 +180,31 @@ graph-engineer plan workflow.json --json
 dependencies and unlocks, and a stable unweighted critical path. Both are pure local operations:
 they do not load private worker configuration, invoke a model, create a worktree, or execute a
 workflow check.
+
+### Deterministic operations, routes, and bounded loops
+
+`transform` and `check` nodes can execute the closed built-in registry without a custom Python
+executor: `schema_validate`, `select`, `map`, `stable_union`, `dedupe`, `sort`,
+`typed_predicate`, `risk_router`, and `verdict_reducer`. There is no eval or shell escape hatch.
+Typed `route` predicates persist selected/skipped decisions. Explicit `loop` edges may reopen only
+a static ancestor region, require replay-safe effect-free nodes, checkpoint every iteration, share
+the total attempt budget, and fail closed at `max_iterations`.
+
+### Role policy and risk verification
+
+A durable workflow may bind an exact generation and digest of
+`.graph-engineering/role-policy.json`. Each agent then declares an exact `authority` subset; the
+runtime rejects any profile capability, tool, write scope, effect, deployment target, approval, or
+token/cost expansion. The graph may narrow this reviewed policy but never expand it; fallback
+profiles require their own equivalent narrowed authority declaration.
+
+Every policy-bound agent also declares `verification`: low risk uses deterministic checks only;
+medium requires one verifier with a distinct profile, lineage, and context; high requires at least
+two distinct lenses plus a required named-human approval node. Producers explicitly classify
+`raw_evidence_outputs`; verifier inputs must bind those exact producer artifacts, never a decoy or
+producer narrative. Verifiers must be required nodes whose typed verdict artifact accepts only
+`verdict: pass`. Policy-bound execution requires a complete provider token/cost report and treats
+unknown usage as a failure, not zero.
 
 ### Typed integration repair routes
 

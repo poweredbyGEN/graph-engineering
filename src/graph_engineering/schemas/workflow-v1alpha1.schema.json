@@ -19,6 +19,7 @@
         "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       }
     },
+    "role_policy": {"$ref": "#/$defs/rolePolicyBinding"},
     "budgets": {
       "type": "object",
       "additionalProperties": false,
@@ -44,6 +45,63 @@
     }
   },
   "$defs": {
+    "costCeiling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_input_tokens", "max_output_tokens", "max_total_tokens", "max_cost_microusd"],
+      "properties": {
+        "max_input_tokens": {"type": "integer", "minimum": 0},
+        "max_output_tokens": {"type": "integer", "minimum": 0},
+        "max_total_tokens": {"type": "integer", "minimum": 0},
+        "max_cost_microusd": {"type": "integer", "minimum": 0}
+      }
+    },
+    "rolePolicyBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "generation", "digest"],
+      "properties": {
+        "version": {"const": "graph-engineering/role-policy/v1"},
+        "generation": {"type": "integer", "minimum": 1},
+        "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "workAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "capabilities", "tools", "write_scopes", "effects", "deployment_targets", "approval_boundaries", "cost"],
+      "properties": {
+        "profile": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$"},
+        "capabilities": {"type": "array", "uniqueItems": true, "items": {"enum": ["read", "write", "structured_output", "worktree", "resume", "mcp"]}},
+        "tools": {"type": "array", "uniqueItems": true, "maxItems": 256, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$"}},
+        "write_scopes": {"type": "array", "uniqueItems": true, "maxItems": 256, "items": {"type": "string", "minLength": 1, "maxLength": 512}},
+        "effects": {"type": "array", "uniqueItems": true, "maxItems": 256, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$"}},
+        "deployment_targets": {"type": "array", "uniqueItems": true, "maxItems": 256, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$"}},
+        "approval_boundaries": {"type": "array", "uniqueItems": true, "maxItems": 256, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$"}},
+        "cost": {"$ref": "#/$defs/costCeiling"}
+      }
+    },
+    "verifierSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node", "lens", "raw_evidence_inputs"],
+      "properties": {
+        "node": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+        "lens": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$"},
+        "raw_evidence_inputs": {"type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}}
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["risk", "verifiers", "raw_evidence_outputs"],
+      "properties": {
+        "risk": {"enum": ["low", "medium", "high"]},
+        "verifiers": {"type": "array", "maxItems": 16, "items": {"$ref": "#/$defs/verifierSpec"}},
+        "raw_evidence_outputs": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}},
+        "approval": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}
+      }
+    },
     "artifact": {
       "type": "object",
       "additionalProperties": false,
@@ -154,6 +212,7 @@
       "properties": {
         "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
         "profile": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$"},
+        "authority": {"$ref": "#/$defs/workAuthority"},
         "on_codes": {
           "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
           "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$"}
@@ -172,6 +231,52 @@
         }
       }
     },
+    "predicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op"],
+      "properties": {
+        "op": {"enum": ["equals", "not_equals", "in", "exists", "gt", "gte", "lt", "lte", "type_is"]},
+        "value": {},
+        "values": {"type": "array", "maxItems": 1000}
+      },
+      "allOf": [
+        {"if": {"properties": {"op": {"const": "in"}}}, "then": {"required": ["values"]}},
+        {"if": {"properties": {"op": {"enum": ["equals", "not_equals", "gt", "gte", "lt", "lte", "type_is"]}}}, "then": {"required": ["value"]}}
+      ]
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "output"],
+      "properties": {
+        "name": {"enum": ["schema_validate", "select", "map", "stable_union", "dedupe", "sort", "typed_predicate", "risk_router", "verdict_reducer"]},
+        "output": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+        "config": {"type": "object", "maxProperties": 100}
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "predicate"],
+      "properties": {
+        "source": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}\\.[a-z][a-z0-9_-]{0,63}$"},
+        "path": {"type": "array", "maxItems": 32, "items": {"oneOf": [{"type": "string"}, {"type": "integer", "minimum": 0}]}},
+        "predicate": {"$ref": "#/$defs/predicate"}
+      }
+    },
+    "loop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "output", "predicate", "max_iterations"],
+      "properties": {
+        "target": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+        "output": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+        "path": {"type": "array", "maxItems": 32, "items": {"oneOf": [{"type": "string"}, {"type": "integer", "minimum": 0}]}},
+        "predicate": {"$ref": "#/$defs/predicate"},
+        "max_iterations": {"type": "integer", "minimum": 1, "maximum": 100}
+      }
+    },
     "node": {
       "type": "object",
       "additionalProperties": false,
@@ -184,6 +289,8 @@
         "inputs": {"type": "object", "additionalProperties": {"type": "string"}},
         "outputs": {"type": "object", "additionalProperties": {"$ref": "#/$defs/artifact"}},
         "profile": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$"},
+        "authority": {"$ref": "#/$defs/workAuthority"},
+        "verification": {"$ref": "#/$defs/verification"},
         "model": {"type": "string", "minLength": 1},
         "workspace": {"enum": ["read-only", "worktree", "shared"]},
         "write_scope": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
@@ -194,6 +301,9 @@
         "join": {"$ref": "#/$defs/join"},
         "repair": {"$ref": "#/$defs/repair"},
         "fallback": {"$ref": "#/$defs/fallback"},
+        "operation": {"$ref": "#/$defs/operation"},
+        "route": {"$ref": "#/$defs/route"},
+        "loop": {"$ref": "#/$defs/loop"},
         "deployment": {
           "type": "object",
           "additionalProperties": false,

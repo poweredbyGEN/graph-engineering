@@ -26,6 +26,7 @@ def test_record_appends_one_line_with_the_fields_stats_needs(
     assert entry["exit_code"] == 0
     assert entry["duration_ms"] == 42
     assert entry["caller"] == "claude"
+    assert entry["failure_class"] == "none"
     assert entry["ts"].endswith("+00:00")
 
 
@@ -92,6 +93,9 @@ def test_summarize_counts_by_command_repo_day_and_survives_corrupt_lines(
     assert result["by_day"] == {"2026-08-09": 1, "2026-08-10": 2}
     assert result["by_caller"] == {"claude": 1, "codex": 1}
     assert result["failed_invocations"] == 1
+    # Legacy v1 entries remain readable but cannot be retroactively classified.
+    assert result["expected_rejections"] == 0
+    assert result["operational_failures"] == 0
     assert result["corrupt_lines"] == 1
     assert result["first"] == "2026-08-09T10:00:00+00:00"
     assert result["last"] == "2026-08-10T12:00:00+00:00"
@@ -139,3 +143,14 @@ def test_default_log_path_is_under_xdg_data_home(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("GRAPH_ENGINEERING_USAGE_LOG", raising=False)
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     assert usage_log_path() == tmp_path / "graph-engineering" / "usage.jsonl"
+
+
+def test_failure_classes_are_reported_separately(tmp_path: Path, monkeypatch):
+    log = tmp_path / "usage.jsonl"
+    monkeypatch.setenv("GRAPH_ENGINEERING_USAGE_LOG", str(log))
+    record_invocation("validate", 2, 1, failure_class="expected_rejection")
+    record_invocation("run", 1, 1, failure_class="operational_failure")
+    report = summarize()
+    assert report["failed_invocations"] == 2
+    assert report["expected_rejections"] == 1
+    assert report["operational_failures"] == 1

@@ -563,6 +563,378 @@ def validate_workflow(workflow: dict[str, Any]) -> None:
             )
         )
 
+    # intent: a policy-bound WorkGraph must narrow reviewed authority and declare
+    # mechanically checkable verification; legacy workflows remain compatible.
+    policy_bound = workflow.get("role_policy") is not None
+    for node_id, node in by_id.items():
+        index = positions[node_id]
+        authority = node.get("authority")
+        verification = node.get("verification")
+        if (authority is not None or verification is not None) and not policy_bound:
+            issues.append(
+                ValidationIssue(
+                    "ROLE_POLICY_REQUIRED",
+                    f"$.nodes[{index}]",
+                    "authority and verification require a bound role_policy",
+                )
+            )
+        if not policy_bound or node["kind"] != "agent":
+            continue
+        if authority is None:
+            issues.append(
+                ValidationIssue(
+                    "WORK_AUTHORITY_REQUIRED",
+                    f"$.nodes[{index}].authority",
+                    "every policy-bound agent must declare narrowed work authority",
+                )
+            )
+        else:
+            required_capabilities = {"read", "structured_output"}
+            if node["workspace"] == "worktree":
+                required_capabilities.add("worktree")
+            if node["permission"] in {"write", "destructive"}:
+                required_capabilities.update({"write", "worktree"})
+            if node["permission"] == "external":
+                required_capabilities.add("mcp")
+            expected_effects = (
+                {node["effect"]} if node.get("effect") not in {None, "none"} else set()
+            )
+            expected_targets = (
+                {node["deployment"]["target"]} if node.get("deployment") else set()
+            )
+            expected_approvals = {
+                value
+                for value in (
+                    node.get("approval"),
+                    (verification or {}).get("approval"),
+                )
+                if value is not None
+            }
+            comparisons = (
+                (authority["profile"], node.get("profile"), "profile"),
+                (set(authority["capabilities"]), required_capabilities, "capabilities"),
+                (
+                    set(authority["write_scopes"]),
+                    set(node.get("write_scope", [])),
+                    "write_scopes",
+                ),
+                (set(authority["effects"]), expected_effects, "effects"),
+                (
+                    set(authority["deployment_targets"]),
+                    expected_targets,
+                    "deployment_targets",
+                ),
+                (
+                    set(authority["approval_boundaries"]),
+                    expected_approvals,
+                    "approval_boundaries",
+                ),
+            )
+            for actual, expected, field in comparisons:
+                if actual != expected:
+                    issues.append(
+                        ValidationIssue(
+                            "WORK_AUTHORITY_MISMATCH",
+                            f"$.nodes[{index}].authority.{field}",
+                            f"declared authority must exactly match node use: expected {expected!r}",
+                        )
+                    )
+            for route_index, route in enumerate(
+                node.get("fallback", {}).get("routes", [])
+            ):
+                route_authority = route.get("authority")
+                route_path = (
+                    f"$.nodes[{index}].fallback.routes[{route_index}].authority"
+                )
+                if route_authority is None:
+                    issues.append(
+                        ValidationIssue(
+                            "FALLBACK_AUTHORITY_REQUIRED",
+                            route_path,
+                            "policy-bound fallback must declare its exact authority",
+                        )
+                    )
+                    continue
+                expected_route = {**authority, "profile": route["profile"]}
+                if route_authority != expected_route:
+                    issues.append(
+                        ValidationIssue(
+                            "FALLBACK_AUTHORITY_MISMATCH",
+                            route_path,
+                            "fallback authority must match node authority except for its declared profile",
+                        )
+                    )
+        if verification is None:
+            issues.append(
+                ValidationIssue(
+                    "RISK_VERIFICATION_REQUIRED",
+                    f"$.nodes[{index}].verification",
+                    "every policy-bound agent must declare risk-based verification",
+                )
+            )
+            continue
+        risk = verification["risk"]
+        verifiers = verification["verifiers"]
+        raw_evidence_outputs = set(verification["raw_evidence_outputs"])
+        approval = verification.get("approval")
+        unknown_raw_outputs = raw_evidence_outputs - set(node.get("outputs", {}))
+        if unknown_raw_outputs or (verifiers and not raw_evidence_outputs):
+            issues.append(
+                ValidationIssue(
+                    "RAW_EVIDENCE_REQUIRED",
+                    f"$.nodes[{index}].verification.raw_evidence_outputs",
+                    "reviewed raw evidence outputs must be non-empty and declared by the producer",
+                )
+            )
+        if (
+            (risk == "low" and (verifiers or approval is not None))
+            or (risk == "medium" and (len(verifiers) != 1 or approval is not None))
+            or (risk == "high" and (len(verifiers) < 2 or approval is None))
+        ):
+            issues.append(
+                ValidationIssue(
+                    "RISK_TOPOLOGY_INVALID",
+                    f"$.nodes[{index}].verification",
+                    "low=checks only, medium=one verifier, high=two lenses plus approval",
+                )
+            )
+        seen_verifier_nodes: set[str] = set()
+        seen_lenses: set[str] = set()
+        for verifier_index, spec in enumerate(verifiers):
+            verifier_path = f"$.nodes[{index}].verification.verifiers[{verifier_index}]"
+            verifier = by_id.get(spec["node"])
+            if (
+                verifier is None
+                or verifier["kind"] != "agent"
+                or spec["node"] == node_id
+            ):
+                issues.append(
+                    ValidationIssue(
+                        "VERIFIER_INVALID",
+                        verifier_path,
+                        "verifier must name a different agent node",
+                    )
+                )
+                continue
+            if spec["node"] in seen_verifier_nodes or spec["lens"] in seen_lenses:
+                issues.append(
+                    ValidationIssue(
+                        "VERIFIER_NOT_INDEPENDENT",
+                        verifier_path,
+                        "verifier nodes and lenses must be distinct",
+                    )
+                )
+            seen_verifier_nodes.add(spec["node"])
+            seen_lenses.add(spec["lens"])
+            if node_id not in needs.get(spec["node"], set()):
+                issues.append(
+                    ValidationIssue(
+                        "VERIFIER_ORDER_INVALID",
+                        verifier_path,
+                        "verifier must directly depend on the producer",
+                    )
+                )
+            verdict = verifier.get("outputs", {}).get("verdict", {})
+            verdict_schema = verdict.get("schema", {})
+            if (
+                verifier.get("required") is not True
+                or not isinstance(verdict_schema, dict)
+                or verdict_schema.get("type") != "object"
+                or "verdict" not in verdict_schema.get("required", [])
+                or verdict_schema.get("properties", {}).get("verdict", {}).get("const")
+                != "pass"
+            ):
+                issues.append(
+                    ValidationIssue(
+                        "VERIFIER_VERDICT_NOT_GATING",
+                        verifier_path,
+                        "verifier must be required and emit a verdict artifact whose schema requires verdict='pass'",
+                    )
+                )
+            for input_name in spec["raw_evidence_inputs"]:
+                binding = verifier.get("inputs", {}).get(input_name)
+                if binding is None:
+                    issues.append(
+                        ValidationIssue(
+                            "RAW_EVIDENCE_REQUIRED",
+                            f"{verifier_path}.raw_evidence_inputs",
+                            f"verifier input {input_name!r} is not declared",
+                        )
+                    )
+                    continue
+                producer_name, _, output_name = binding.partition(".")
+                if producer_name != node_id or output_name not in raw_evidence_outputs:
+                    issues.append(
+                        ValidationIssue(
+                            "SUMMARY_CONTAMINATION",
+                            f"{verifier_path}.raw_evidence_inputs",
+                            "verifier raw evidence must bind an explicitly classified producer output",
+                        )
+                    )
+        if approval is not None:
+            approval_node = by_id.get(approval)
+            if approval_node is None or approval_node["kind"] != "approval":
+                issues.append(
+                    ValidationIssue(
+                        "HIGH_RISK_APPROVAL_REQUIRED",
+                        f"$.nodes[{index}].verification.approval",
+                        "approval must name an approval node",
+                    )
+                )
+            elif approval_node.get("required") is not True:
+                issues.append(
+                    ValidationIssue(
+                        "HIGH_RISK_APPROVAL_REQUIRED",
+                        f"$.nodes[{index}].verification.approval",
+                        "high-risk approval node must be required",
+                    )
+                )
+            elif not seen_verifier_nodes.issubset(needs.get(approval, set())):
+                issues.append(
+                    ValidationIssue(
+                        "HIGH_RISK_APPROVAL_ORDER_INVALID",
+                        f"$.nodes[{index}].verification.approval",
+                        "high-risk approval must depend on every declared verifier",
+                    )
+                )
+
+    # Conditional routes and bounded loop-back edges are control edges.  The required
+    # artifact graph remains acyclic, making the ready frontier deterministic, while a
+    # loop may reopen only a statically known ancestor region under a finite ceiling.
+    loop_attempt_floor = len(nodes)
+    for node_id, node in by_id.items():
+        index = positions[node_id]
+        operation = node.get("operation")
+        if operation is not None:
+            if node["kind"] not in {"transform", "check"}:
+                issues.append(
+                    ValidationIssue(
+                        "OPERATION_KIND",
+                        f"$.nodes[{index}].operation",
+                        "built-in operations are limited to deterministic transform/check nodes",
+                    )
+                )
+            if node["permission"] != "read" or node.get("effect") not in {
+                None,
+                "none",
+                "read",
+            }:
+                issues.append(
+                    ValidationIssue(
+                        "OPERATION_EFFECT",
+                        f"$.nodes[{index}].operation",
+                        "built-in operations must be pure read operations",
+                    )
+                )
+            if operation["output"] not in node.get("outputs", {}):
+                issues.append(
+                    ValidationIssue(
+                        "OPERATION_OUTPUT",
+                        f"$.nodes[{index}].operation.output",
+                        "operation output must name a declared node output",
+                    )
+                )
+
+        route = node.get("route")
+        if route is not None:
+            producer_id, _, output_name = route["source"].partition(".")
+            if producer_id not in by_id or output_name not in by_id.get(
+                producer_id, {}
+            ).get("outputs", {}):
+                issues.append(
+                    ValidationIssue(
+                        "INVALID_ROUTE_SOURCE",
+                        f"$.nodes[{index}].route.source",
+                        f"route source {route['source']!r} does not resolve to a declared output",
+                    )
+                )
+            elif producer_id not in _ancestors(node_id, needs):
+                issues.append(
+                    ValidationIssue(
+                        "UNORDERED_ROUTE",
+                        f"$.nodes[{index}].route.source",
+                        "conditional route source must be an upstream dependency",
+                    )
+                )
+
+        loop = node.get("loop")
+        if loop is None:
+            continue
+        target_id = loop["target"]
+        if target_id not in by_id:
+            issues.append(
+                ValidationIssue(
+                    "INVALID_LOOP_TARGET",
+                    f"$.nodes[{index}].loop.target",
+                    f"loop target {target_id!r} does not exist",
+                )
+            )
+            continue
+        if target_id not in _ancestors(node_id, needs):
+            issues.append(
+                ValidationIssue(
+                    "UNORDERED_LOOP_TARGET",
+                    f"$.nodes[{index}].loop.target",
+                    "loop target must be an upstream dependency of its controller",
+                )
+            )
+            continue
+        if loop["output"] not in node.get("outputs", {}):
+            issues.append(
+                ValidationIssue(
+                    "INVALID_LOOP_OUTPUT",
+                    f"$.nodes[{index}].loop.output",
+                    "loop predicate output must be declared by its controller",
+                )
+            )
+        region = {
+            candidate
+            for candidate in by_id
+            if candidate == target_id
+            or (
+                target_id in _ancestors(candidate, needs)
+                and candidate in _ancestors(node_id, needs)
+            )
+            or candidate == node_id
+        }
+        unsafe = sorted(
+            candidate
+            for candidate in region
+            if by_id[candidate].get("effect") not in {None, "none", "read"}
+            or by_id[candidate]["permission"] in {"external", "destructive"}
+        )
+        if unsafe:
+            issues.append(
+                ValidationIssue(
+                    "UNSAFE_LOOP_EFFECT",
+                    f"$.nodes[{index}].loop",
+                    f"bounded loops may replay only effect-free nodes: {unsafe}",
+                )
+            )
+        iterations = int(loop["max_iterations"])
+        loop_attempt_floor += len(region) * (iterations - 1)
+        insufficient = sorted(
+            candidate
+            for candidate in region
+            if by_id[candidate].get("retry", {}).get("max_attempts", 1) < iterations
+        )
+        if insufficient:
+            issues.append(
+                ValidationIssue(
+                    "LOOP_ATTEMPT_LIMIT",
+                    f"$.nodes[{index}].loop.max_iterations",
+                    f"loop region nodes need retry.max_attempts >= {iterations}: {insufficient}",
+                )
+            )
+
+    if budgets["max_total_attempts"] < loop_attempt_floor:
+        issues.append(
+            ValidationIssue(
+                "LOOP_TOTAL_ATTEMPT_BUDGET",
+                "$.budgets.max_total_attempts",
+                f"bounded loops require a worst-case budget of at least {loop_attempt_floor} attempts",
+            )
+        )
     for node_id, node in by_id.items():
         index = positions[node_id]
         for output_name, contract in node.get("outputs", {}).items():
@@ -740,7 +1112,9 @@ def validate_workflow(workflow: dict[str, Any]) -> None:
                     )
                 )
 
-    repair_attempt_floor = len(nodes)
+    # Loop replays and typed repair rounds share one global attempt budget; validating
+    # each feature in isolation would allow their combined worst case to exceed it.
+    repair_attempt_floor = loop_attempt_floor
     for node_id, node in by_id.items():
         repair = node.get("repair")
         if repair is None:

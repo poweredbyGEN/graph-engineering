@@ -6,9 +6,11 @@ from collections.abc import Sequence
 from typing import Any
 
 from . import __version__
+from .builtins import OPERATIONS
 from .compilation import PROPOSAL_VERSION
 from .config import CAPABILITY_NAMES
 from .contracts import WORKFLOW_VERSION, workflow_schema
+from .economics import OUTCOME_VERSION, PROMOTION_VERSION
 from .forking import FORK_VERSION
 from .learning import BENCHMARK_VERSION, LEARNING_PROPOSAL_VERSION
 from .lifecycle import (
@@ -17,6 +19,8 @@ from .lifecycle import (
     EVENT_STREAM_VERSION,
 )
 from .project import ASSESSMENT_VERSION, PRODUCT_CONTRACT_VERSION, PROJECT_VERSION
+from .role_policy import ROLE_POLICY_VERSION
+from .selection import SELECTION_VERSION
 from .session_ux import HANDOFF_VERSION, STATUS_PROJECTION_VERSION
 from .usage import USAGE_VERSION
 from .watch import WATCH_VERSION
@@ -54,6 +58,10 @@ def capability_manifest(cli_commands: Sequence[str]) -> dict[str, Any]:
             "run_fork": FORK_VERSION,
             "run_watch": WATCH_VERSION,
             "usage_stats": USAGE_VERSION,
+            "selection": SELECTION_VERSION,
+            "outcome": OUTCOME_VERSION,
+            "promotion": PROMOTION_VERSION,
+            "role_policy": ROLE_POLICY_VERSION,
             "event_stream": EVENT_STREAM_VERSION,
         },
         "cli_commands": sorted(set(cli_commands)),
@@ -74,6 +82,9 @@ def capability_manifest(cli_commands: Sequence[str]) -> dict[str, Any]:
             "durable_resume": True,
             "typed_repair_routes": True,
             "typed_profile_fallback": True,
+            "typed_conditional_routes": True,
+            "bounded_checkpointed_loops": True,
+            "deterministic_operations": sorted(OPERATIONS),
         },
         "execution": {
             "profile_capabilities": sorted(CAPABILITY_NAMES),
@@ -81,6 +92,9 @@ def capability_manifest(cli_commands: Sequence[str]) -> dict[str, Any]:
             "digest_bound_receipts": True,
             "isolated_worktrees": True,
             "single_integration_owner": True,
+            "role_authority_narrowing": True,
+            "risk_based_verification": True,
+            "provider_usage_receipts": True,
         },
         "adapters": {
             "subprocess": "available",
@@ -107,6 +121,9 @@ def capability_manifest(cli_commands: Sequence[str]) -> dict[str, Any]:
             "bounded_event_stream": True,
             "live_run_watch": True,
             "usage_telemetry": True,
+            "task_specific_selection": True,
+            "lightweight_host_execution": True,
+            "evidence_gated_durable_promotion": True,
         },
     }
 

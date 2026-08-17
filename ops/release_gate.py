@@ -40,10 +40,14 @@ REQUIRED_CAPABILITY_COMMANDS = frozenset(
         "accept",
         "capabilities",
         "compile",
+        "choose",
         "doctor",
         "events",
+        "execute",
         "fork",
         "plan",
+        "outcome",
+        "promote",
         "watch",
         "stats",
         "run",
@@ -365,6 +369,10 @@ def assert_installed_capabilities(output: str, expected_version: str) -> None:
         "run_watch",
         "usage_stats",
         "event_stream",
+        "selection",
+        "outcome",
+        "promotion",
+        "role_policy",
     }
     if set(schemas) != required_schemas or any(
         not isinstance(value, str) or not value for value in schemas.values()
@@ -386,6 +394,12 @@ def assert_installed_capabilities(output: str, expected_version: str) -> None:
         raise GateError("installed capability manifest omits live run watch")
     if manifest.get("features", {}).get("usage_telemetry") is not True:
         raise GateError("installed capability manifest omits usage telemetry")
+    if manifest.get("features", {}).get("task_specific_selection") is not True:
+        raise GateError("installed capability manifest omits task-specific selection")
+    if manifest.get("features", {}).get("evidence_gated_durable_promotion") is not True:
+        raise GateError(
+            "installed capability manifest omits durable promotion evidence"
+        )
 
 
 def build_and_smoke(scratch: Path) -> tuple[Path, Path]:

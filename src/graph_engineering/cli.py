@@ -40,6 +40,12 @@ from .contracts import (
     WorkflowValidationError,
     validate_workflow,
 )
+from .economics import (
+    EconomicsError,
+    load_outcomes,
+    promotion_evidence,
+    record_outcomes,
+)
 from .forking import FORK_VERSION, ForkError, create_fork
 from .learning import (
     LearningError,
@@ -65,6 +71,13 @@ from .project import (
     load_project_policy,
     matching_active_runs,
     scaffold_project,
+)
+from .selection import (
+    SelectionError,
+    TaskBrief,
+    choose_execution,
+    graphify_dependency_evidence,
+    load_brief,
 )
 from .session_ux import (
     HANDOFF_VERSION,
@@ -996,6 +1009,112 @@ def _benchmark(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _task_brief(args: argparse.Namespace) -> TaskBrief:
+    if args.brief:
+        return load_brief(args.brief)
+    return TaskBrief.from_mapping(
+        {
+            "task": args.task,
+            "independent_lanes": args.independent_lanes,
+            "estimated_linear_seconds": args.estimated_linear_seconds,
+            "estimated_graph_seconds": args.estimated_graph_seconds,
+            "estimated_linear_cost_usd": args.estimated_linear_cost_usd,
+            "estimated_graph_cost_usd": args.estimated_graph_cost_usd,
+            "repetitions": args.repetitions,
+            "high_value": args.high_value,
+            "long_running": args.long_running,
+            "resumable": args.resumable,
+            "effectful": args.effectful,
+            "acceptance_suite": args.acceptance_suite,
+        }
+    )
+
+
+def _choose(args: argparse.Namespace, *, execute: bool = False) -> dict[str, Any]:
+    promotion = (
+        promotion_evidence(load_outcomes(Path(args.promotion).expanduser()))
+        if args.promotion
+        else None
+    )
+    if bool(args.promotion_reviewed_by) != bool(args.promotion_digest):
+        raise SelectionError(
+            "PROMOTION_REVIEW_INVALID",
+            "--promotion-reviewed-by and --promotion-digest are required together",
+        )
+    if args.promotion_reviewed_by:
+        if promotion is None or args.promotion_digest != promotion["digest"]:
+            raise SelectionError(
+                "PROMOTION_REVIEW_INVALID",
+                "named review must bind the exact promotion digest",
+            )
+        if not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9_.@ -]{0,127}", args.promotion_reviewed_by
+        ):
+            raise SelectionError(
+                "PROMOTION_REVIEW_INVALID", "reviewer identity is invalid"
+            )
+        promotion = {
+            **promotion,
+            "reviewed": True,
+            "reviewed_by": args.promotion_reviewed_by,
+        }
+    graphify = None
+    if args.repo:
+        repo = Path(args.repo).expanduser().resolve(strict=True)
+        if (repo / "graphify-out" / "graph.json").is_file():
+            graphify = graphify_dependency_evidence(repo, args.focus_path)
+    decision = choose_execution(
+        _task_brief(args), promotion=promotion, graphify=graphify
+    )
+    payload: dict[str, Any] = {
+        "ok": True,
+        "command": "execute" if execute else "choose",
+        "decision": decision,
+        "promotion": promotion,
+    }
+    if execute:
+        # This is the deliberately thin host-agent contract. LINEAR and transient
+        # work need no repository capsule or durable state. Durable execution still
+        # crosses the existing reviewed workflow boundary.
+        payload["execution"] = {
+            "mode": decision["mode"],
+            "capsule_required": decision["mode"] == "DURABLE_GRAPH",
+            "durable_runtime_required": decision["mode"] == "DURABLE_GRAPH",
+            "host_dispatch_authorized": decision["mode"] != "DURABLE_GRAPH",
+            "instructions": decision["next_step"],
+        }
+    return payload
+
+
+def _outcome(args: argparse.Namespace) -> dict[str, Any]:
+    records = load_outcomes(Path(args.input).expanduser())
+    log = record_outcomes(records)
+    output = (
+        str(_write_document(args.output, {"outcomes": records}))
+        if args.output
+        else None
+    )
+    return {
+        "ok": True,
+        "command": "outcome",
+        "recorded": len(records),
+        "log": str(log),
+        "output": output,
+        "outcomes": records,
+    }
+
+
+def _promote(args: argparse.Namespace) -> dict[str, Any]:
+    report = promotion_evidence(load_outcomes(Path(args.evidence).expanduser()))
+    output = str(_write_document(args.output, report)) if args.output else None
+    return {
+        "ok": True,
+        "command": "promote",
+        "output": output,
+        "promotion": report,
+    }
+
+
 def _feedback(args: argparse.Namespace) -> dict[str, Any]:
     proposal = compile_feedback(Path(args.input).expanduser())
     output = str(_write_document(args.output, proposal)) if args.output else None
@@ -1114,6 +1233,12 @@ def _error_payload(command: str | None, exc: BaseException) -> dict[str, Any]:
             "error": {"code": exc.code, "message": exc.message},
         }
     if isinstance(exc, LearningError):
+        return {
+            "ok": False,
+            "command": command,
+            "error": {"code": exc.code, "message": exc.message},
+        }
+    if isinstance(exc, (EconomicsError, SelectionError)):
         return {
             "ok": False,
             "command": command,
@@ -1244,6 +1369,19 @@ def _print_human(payload: Mapping[str, Any]) -> None:
         print(f"learning proposal {proposal['source_id']}: {proposal['digest']}")
         for action in proposal["actions"]:
             print(f"  {action['id']}: {action['target']} (review required)")
+    elif command in {"choose", "execute"}:
+        decision = payload["decision"]
+        print(f"mode: {decision['mode']}")
+        print(f"next: {decision['next_step']}")
+        for reason in decision["reasons"]:
+            print(f"  {'yes' if reason['met'] else 'no'} {reason['criterion']}")
+    elif command == "outcome":
+        print(f"validated outcomes: {payload['recorded']}")
+    elif command == "promote":
+        report = payload["promotion"]
+        print(
+            f"promotion: {report['decision']} ({report['matched_wins']} matched wins)"
+        )
     elif command == "events":
         for event in payload["events"]:
             print(json.dumps(event, sort_keys=True, separators=(",", ":")))
@@ -1439,6 +1577,61 @@ def _parser() -> argparse.ArgumentParser:
     feedback.add_argument("--input", required=True)
     feedback.add_argument("--output")
     feedback.add_argument("--json", action="store_true", dest="json_output")
+
+    def add_task_brief(command: argparse.ArgumentParser) -> None:
+        source = command.add_mutually_exclusive_group(required=True)
+        source.add_argument("--brief", help="bounded JSON task brief")
+        source.add_argument("--task", help="concise task statement")
+        command.add_argument("--independent-lanes", type=int, default=1)
+        command.add_argument("--estimated-linear-seconds", type=float)
+        command.add_argument("--estimated-graph-seconds", type=float)
+        command.add_argument("--estimated-linear-cost-usd", type=float)
+        command.add_argument("--estimated-graph-cost-usd", type=float)
+        command.add_argument("--repetitions", type=int, default=1)
+        command.add_argument("--high-value", action="store_true")
+        command.add_argument("--long-running", action="store_true")
+        command.add_argument("--resumable", action="store_true")
+        command.add_argument("--effectful", action="store_true")
+        command.add_argument("--acceptance-suite")
+        command.add_argument("--promotion", help="matched outcome evidence JSON")
+        command.add_argument("--promotion-reviewed-by", help="named human reviewer")
+        command.add_argument(
+            "--promotion-digest", help="exact eligible promotion digest"
+        )
+        command.add_argument(
+            "--repo", help="optionally ingest bounded Graphify evidence"
+        )
+        command.add_argument(
+            "--focus-path",
+            action="append",
+            default=[],
+            help="tracked task-relevant source path (repeatable; never inferred from node count)",
+        )
+        command.add_argument("--json", action="store_true", dest="json_output")
+
+    choose = subparsers.add_parser(
+        "choose",
+        help="choose linear, transient, or durable execution from task evidence",
+    )
+    add_task_brief(choose)
+    execute = subparsers.add_parser(
+        "execute",
+        help="emit a lightweight host execution contract without repository setup",
+    )
+    add_task_brief(execute)
+    outcome = subparsers.add_parser(
+        "outcome", help="validate and report outcome economics without vanity metrics"
+    )
+    outcome.add_argument("--input", required=True)
+    outcome.add_argument("--output")
+    outcome.add_argument("--json", action="store_true", dest="json_output")
+    promote = subparsers.add_parser(
+        "promote",
+        help="test matched transient runs for durable-template review eligibility",
+    )
+    promote.add_argument("--evidence", required=True)
+    promote.add_argument("--output")
+    promote.add_argument("--json", action="store_true", dest="json_output")
     return parser
 
 
@@ -1514,6 +1707,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "feedback":
             payload = _feedback(args)
             exit_code = 0
+        elif args.command == "choose":
+            payload = _choose(args)
+            exit_code = 0
+        elif args.command == "execute":
+            payload = _choose(args, execute=True)
+            exit_code = 0
+        elif args.command == "outcome":
+            payload = _outcome(args)
+            exit_code = 0
+        elif args.command == "promote":
+            payload = _promote(args)
+            exit_code = 0
         elif args.command == "stats":
             payload = {"ok": True, **summarize_usage(days=args.days)}
             exit_code = 0
@@ -1527,6 +1732,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         ProjectPolicyError,
         LifecycleError,
         LearningError,
+        EconomicsError,
+        SelectionError,
         ForkError,
         SessionUxError,
         CompilationError,
@@ -1536,7 +1743,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     ) as exc:
         payload = _error_payload(args.command, exc)
         exit_code = 2
-    record_invocation(args.command, exit_code, int((time.monotonic() - started) * 1000))
+    failure_class = "none"
+    if exit_code == 1:
+        failure_class = "operational_failure"
+    elif exit_code == 2:
+        code = str(payload.get("error", {}).get("code", ""))
+        failure_class = (
+            "operational_failure"
+            if code in {"IO_ERROR", "RUN_INVALID", "CORRUPT_RECEIPT_LEDGER"}
+            else "expected_rejection"
+        )
+    record_invocation(
+        args.command,
+        exit_code,
+        int((time.monotonic() - started) * 1000),
+        failure_class=failure_class,
+    )
     if args.json_output:
         print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
     else:
