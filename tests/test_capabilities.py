@@ -19,6 +19,7 @@ from graph_engineering.project import (
     PRODUCT_CONTRACT_VERSION,
     PROJECT_VERSION,
 )
+from graph_engineering.role_policy import ROLE_POLICY_VERSION
 from graph_engineering.selection import SELECTION_VERSION
 from graph_engineering.session_ux import HANDOFF_VERSION, STATUS_PROJECTION_VERSION
 from graph_engineering.usage import USAGE_VERSION
@@ -62,6 +63,7 @@ def test_capability_manifest_matches_parser_schema_and_runtime_constants(capsys)
         "selection": SELECTION_VERSION,
         "outcome": OUTCOME_VERSION,
         "promotion": PROMOTION_VERSION,
+        "role_policy": ROLE_POLICY_VERSION,
     }
     assert manifest["features"]["worker_smoke"] is True
     assert manifest["features"]["immutable_run_forks"] is True
@@ -72,6 +74,11 @@ def test_capability_manifest_matches_parser_schema_and_runtime_constants(capsys)
     assert manifest["features"]["reviewed_workflow_compilation"] is True
     assert manifest["features"]["self_generated_workflows"] is False
     assert manifest["runtime"]["typed_profile_fallback"] is True
+    assert manifest["runtime"]["bounded_checkpointed_loops"] is True
+    assert "risk_router" in manifest["runtime"]["deterministic_operations"]
+    assert manifest["execution"]["role_authority_narrowing"] is True
+    assert manifest["execution"]["risk_based_verification"] is True
+    assert manifest["execution"]["provider_usage_receipts"] is True
     assert manifest["features"]["outcome_benchmarking"] is True
     assert manifest["features"]["reviewed_feedback_learning"] is True
     assert manifest["features"]["task_specific_selection"] is True

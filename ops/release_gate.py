@@ -372,6 +372,7 @@ def assert_installed_capabilities(output: str, expected_version: str) -> None:
         "selection",
         "outcome",
         "promotion",
+        "role_policy",
     }
     if set(schemas) != required_schemas or any(
         not isinstance(value, str) or not value for value in schemas.values()
