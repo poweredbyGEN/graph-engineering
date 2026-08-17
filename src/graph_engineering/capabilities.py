@@ -9,6 +9,7 @@ from . import __version__
 from .compilation import PROPOSAL_VERSION
 from .config import CAPABILITY_NAMES
 from .contracts import WORKFLOW_VERSION, workflow_schema
+from .economics import OUTCOME_VERSION, PROMOTION_VERSION
 from .forking import FORK_VERSION
 from .learning import BENCHMARK_VERSION, LEARNING_PROPOSAL_VERSION
 from .lifecycle import (
@@ -17,6 +18,7 @@ from .lifecycle import (
     EVENT_STREAM_VERSION,
 )
 from .project import ASSESSMENT_VERSION, PRODUCT_CONTRACT_VERSION, PROJECT_VERSION
+from .selection import SELECTION_VERSION
 from .session_ux import HANDOFF_VERSION, STATUS_PROJECTION_VERSION
 from .usage import USAGE_VERSION
 from .watch import WATCH_VERSION
@@ -54,6 +56,9 @@ def capability_manifest(cli_commands: Sequence[str]) -> dict[str, Any]:
             "run_fork": FORK_VERSION,
             "run_watch": WATCH_VERSION,
             "usage_stats": USAGE_VERSION,
+            "selection": SELECTION_VERSION,
+            "outcome": OUTCOME_VERSION,
+            "promotion": PROMOTION_VERSION,
             "event_stream": EVENT_STREAM_VERSION,
         },
         "cli_commands": sorted(set(cli_commands)),
@@ -107,6 +112,9 @@ def capability_manifest(cli_commands: Sequence[str]) -> dict[str, Any]:
             "bounded_event_stream": True,
             "live_run_watch": True,
             "usage_telemetry": True,
+            "task_specific_selection": True,
+            "lightweight_host_execution": True,
+            "evidence_gated_durable_promotion": True,
         },
     }
 

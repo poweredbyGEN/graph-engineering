@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-USAGE_VERSION = "1"
+USAGE_VERSION = "2"
 
 _LOG_ENV = "GRAPH_ENGINEERING_USAGE_LOG"
 _OPT_OUT_ENV = "GRAPH_ENGINEERING_NO_USAGE_LOG"
@@ -47,7 +47,13 @@ def _repo_label(start: Path) -> str:
     return start.name
 
 
-def record_invocation(command: str, exit_code: int, duration_ms: int) -> None:
+def record_invocation(
+    command: str,
+    exit_code: int,
+    duration_ms: int,
+    *,
+    failure_class: str = "none",
+) -> None:
     """Append one usage line. MUST never raise — telemetry cannot break the tool."""
     if os.environ.get(_OPT_OUT_ENV):
         return
@@ -60,6 +66,7 @@ def record_invocation(command: str, exit_code: int, duration_ms: int) -> None:
             "duration_ms": duration_ms,
             "repo": _repo_label(Path.cwd()),
             "caller": os.environ.get(_CALLER_ENV) or None,
+            "failure_class": failure_class,
         }
         path = usage_log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -81,6 +88,8 @@ def summarize(days: int | None = None) -> dict[str, Any]:
     day_counts: dict[str, int] = {}
     callers: dict[str, int] = {}
     failures = 0
+    expected_rejections = 0
+    operational_failures = 0
     corrupt = 0
     total = 0
     first: str | None = None
@@ -117,6 +126,13 @@ def summarize(days: int | None = None) -> dict[str, Any]:
                 callers[str(caller)] = callers.get(str(caller), 0) + 1
             if entry.get("exit_code") not in (0, None):
                 failures += 1
+            failure_class = entry.get("failure_class")
+            if failure_class == "expected_rejection":
+                expected_rejections += 1
+            elif failure_class == "operational_failure":
+                operational_failures += 1
+    from .economics import summarize_outcomes
+
     return {
         "version": USAGE_VERSION,
         "log": str(path),
@@ -127,7 +143,10 @@ def summarize(days: int | None = None) -> dict[str, Any]:
         "by_day": dict(sorted(day_counts.items())),
         "by_caller": dict(sorted(callers.items(), key=lambda i: -i[1])),
         "failed_invocations": failures,
+        "expected_rejections": expected_rejections,
+        "operational_failures": operational_failures,
         "corrupt_lines": corrupt,
         "first": first,
         "last": last,
+        "outcomes": summarize_outcomes(),
     }
