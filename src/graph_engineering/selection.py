@@ -196,7 +196,7 @@ def choose_execution(
         and isinstance(promotion.get("reviewed_by"), str)
         and bool(promotion.get("reviewed_by"))
     )
-    durable = graph_earned and (inherent_durability or reviewed_promotion)
+    durable = inherent_durability or (graph_earned and reviewed_promotion)
     mode: ExecutionMode = (
         "DURABLE_GRAPH" if durable else "TRANSIENT_GRAPH" if graph_earned else "LINEAR"
     )

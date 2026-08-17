@@ -80,6 +80,16 @@ def test_inherent_resume_need_upgrades_an_earned_graph_to_durable():
     assert decision["mode"] == "DURABLE_GRAPH"
 
 
+def test_inherent_durability_does_not_require_a_parallel_frontier():
+    # intent: a sequential effectful/resumable campaign still needs durable state,
+    # fencing, reconciliation, and receipts across session boundaries.
+    decision = choose_execution(
+        brief(repetitions=5, long_running=True, resumable=True, effectful=True)
+    )
+    assert decision["mode"] == "DURABLE_GRAPH"
+    assert decision["graph_earned"] is False
+
+
 def test_repetition_is_only_a_promotion_candidate_without_matched_evidence():
     decision = choose_execution(
         brief(
