@@ -172,6 +172,52 @@
         }
       }
     },
+    "predicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op"],
+      "properties": {
+        "op": {"enum": ["equals", "not_equals", "in", "exists", "gt", "gte", "lt", "lte", "type_is"]},
+        "value": {},
+        "values": {"type": "array", "maxItems": 1000}
+      },
+      "allOf": [
+        {"if": {"properties": {"op": {"const": "in"}}}, "then": {"required": ["values"]}},
+        {"if": {"properties": {"op": {"enum": ["equals", "not_equals", "gt", "gte", "lt", "lte", "type_is"]}}}, "then": {"required": ["value"]}}
+      ]
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "output"],
+      "properties": {
+        "name": {"enum": ["schema_validate", "select", "map", "stable_union", "dedupe", "sort", "typed_predicate", "risk_router", "verdict_reducer"]},
+        "output": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+        "config": {"type": "object", "maxProperties": 100}
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "predicate"],
+      "properties": {
+        "source": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}\\.[a-z][a-z0-9_-]{0,63}$"},
+        "path": {"type": "array", "maxItems": 32, "items": {"oneOf": [{"type": "string"}, {"type": "integer", "minimum": 0}]}},
+        "predicate": {"$ref": "#/$defs/predicate"}
+      }
+    },
+    "loop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "output", "predicate", "max_iterations"],
+      "properties": {
+        "target": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+        "output": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+        "path": {"type": "array", "maxItems": 32, "items": {"oneOf": [{"type": "string"}, {"type": "integer", "minimum": 0}]}},
+        "predicate": {"$ref": "#/$defs/predicate"},
+        "max_iterations": {"type": "integer", "minimum": 1, "maximum": 100}
+      }
+    },
     "node": {
       "type": "object",
       "additionalProperties": false,
@@ -194,6 +240,9 @@
         "join": {"$ref": "#/$defs/join"},
         "repair": {"$ref": "#/$defs/repair"},
         "fallback": {"$ref": "#/$defs/fallback"},
+        "operation": {"$ref": "#/$defs/operation"},
+        "route": {"$ref": "#/$defs/route"},
+        "loop": {"$ref": "#/$defs/loop"},
         "deployment": {
           "type": "object",
           "additionalProperties": false,

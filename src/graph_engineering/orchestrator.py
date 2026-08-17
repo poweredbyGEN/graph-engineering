@@ -34,6 +34,7 @@ from .adapters import (
     execute_profile,
 )
 from .artifacts import ArtifactError, canonical_json
+from .builtins import BuiltinOperationError, builtin_executor
 from .config import (
     A2AAdapter,
     AgentConfig,
@@ -413,6 +414,12 @@ class PortableRuntime:
                     f"custom node {node['id']!r} must be a pure read transform; "
                     "repository writes belong in an agent or integration node",
                 )
+            if node.get("operation") is not None:
+                try:
+                    builtin_executor(node["operation"])
+                except BuiltinOperationError as exc:
+                    raise OrchestrationError("INVALID_OPERATION", str(exc)) from exc
+                continue
             if (
                 node["id"] not in self.custom_executors
                 and node["kind"] not in self.custom_executors
@@ -1223,6 +1230,8 @@ class PortableRuntime:
             elif node["kind"] == "approval":
                 approved = dict(self.approvals[node["id"]])
                 result[node["id"]] = lambda _context, value=approved: dict(value)
+            elif node.get("operation") is not None:
+                result[node["id"]] = builtin_executor(node["operation"])
         return result
 
     def run(

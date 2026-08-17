@@ -563,6 +563,143 @@ def validate_workflow(workflow: dict[str, Any]) -> None:
             )
         )
 
+    # Conditional routes and bounded loop-back edges are control edges.  The required
+    # artifact graph remains acyclic, making the ready frontier deterministic, while a
+    # loop may reopen only a statically known ancestor region under a finite ceiling.
+    loop_attempt_floor = len(nodes)
+    for node_id, node in by_id.items():
+        index = positions[node_id]
+        operation = node.get("operation")
+        if operation is not None:
+            if node["kind"] not in {"transform", "check"}:
+                issues.append(
+                    ValidationIssue(
+                        "OPERATION_KIND",
+                        f"$.nodes[{index}].operation",
+                        "built-in operations are limited to deterministic transform/check nodes",
+                    )
+                )
+            if node["permission"] != "read" or node.get("effect") not in {
+                None,
+                "none",
+                "read",
+            }:
+                issues.append(
+                    ValidationIssue(
+                        "OPERATION_EFFECT",
+                        f"$.nodes[{index}].operation",
+                        "built-in operations must be pure read operations",
+                    )
+                )
+            if operation["output"] not in node.get("outputs", {}):
+                issues.append(
+                    ValidationIssue(
+                        "OPERATION_OUTPUT",
+                        f"$.nodes[{index}].operation.output",
+                        "operation output must name a declared node output",
+                    )
+                )
+
+        route = node.get("route")
+        if route is not None:
+            producer_id, _, output_name = route["source"].partition(".")
+            if producer_id not in by_id or output_name not in by_id.get(
+                producer_id, {}
+            ).get("outputs", {}):
+                issues.append(
+                    ValidationIssue(
+                        "INVALID_ROUTE_SOURCE",
+                        f"$.nodes[{index}].route.source",
+                        f"route source {route['source']!r} does not resolve to a declared output",
+                    )
+                )
+            elif producer_id not in _ancestors(node_id, needs):
+                issues.append(
+                    ValidationIssue(
+                        "UNORDERED_ROUTE",
+                        f"$.nodes[{index}].route.source",
+                        "conditional route source must be an upstream dependency",
+                    )
+                )
+
+        loop = node.get("loop")
+        if loop is None:
+            continue
+        target_id = loop["target"]
+        if target_id not in by_id:
+            issues.append(
+                ValidationIssue(
+                    "INVALID_LOOP_TARGET",
+                    f"$.nodes[{index}].loop.target",
+                    f"loop target {target_id!r} does not exist",
+                )
+            )
+            continue
+        if target_id not in _ancestors(node_id, needs):
+            issues.append(
+                ValidationIssue(
+                    "UNORDERED_LOOP_TARGET",
+                    f"$.nodes[{index}].loop.target",
+                    "loop target must be an upstream dependency of its controller",
+                )
+            )
+            continue
+        if loop["output"] not in node.get("outputs", {}):
+            issues.append(
+                ValidationIssue(
+                    "INVALID_LOOP_OUTPUT",
+                    f"$.nodes[{index}].loop.output",
+                    "loop predicate output must be declared by its controller",
+                )
+            )
+        region = {
+            candidate
+            for candidate in by_id
+            if candidate == target_id
+            or (
+                target_id in _ancestors(candidate, needs)
+                and candidate in _ancestors(node_id, needs)
+            )
+            or candidate == node_id
+        }
+        unsafe = sorted(
+            candidate
+            for candidate in region
+            if by_id[candidate].get("effect") not in {None, "none", "read"}
+            or by_id[candidate]["permission"] in {"external", "destructive"}
+        )
+        if unsafe:
+            issues.append(
+                ValidationIssue(
+                    "UNSAFE_LOOP_EFFECT",
+                    f"$.nodes[{index}].loop",
+                    f"bounded loops may replay only effect-free nodes: {unsafe}",
+                )
+            )
+        iterations = int(loop["max_iterations"])
+        loop_attempt_floor += len(region) * (iterations - 1)
+        insufficient = sorted(
+            candidate
+            for candidate in region
+            if by_id[candidate].get("retry", {}).get("max_attempts", 1) < iterations
+        )
+        if insufficient:
+            issues.append(
+                ValidationIssue(
+                    "LOOP_ATTEMPT_LIMIT",
+                    f"$.nodes[{index}].loop.max_iterations",
+                    f"loop region nodes need retry.max_attempts >= {iterations}: {insufficient}",
+                )
+            )
+
+    if budgets["max_total_attempts"] < loop_attempt_floor:
+        issues.append(
+            ValidationIssue(
+                "LOOP_TOTAL_ATTEMPT_BUDGET",
+                "$.budgets.max_total_attempts",
+                f"bounded loops require a worst-case budget of at least {loop_attempt_floor} attempts",
+            )
+        )
     for node_id, node in by_id.items():
         index = positions[node_id]
         for output_name, contract in node.get("outputs", {}).items():
@@ -740,7 +877,9 @@ def validate_workflow(workflow: dict[str, Any]) -> None:
                     )
                 )
 
-    repair_attempt_floor = len(nodes)
+    # Loop replays and typed repair rounds share one global attempt budget; validating
+    # each feature in isolation would allow their combined worst case to exceed it.
+    repair_attempt_floor = loop_attempt_floor
     for node_id, node in by_id.items():
         repair = node.get("repair")
         if repair is None:
