@@ -70,8 +70,8 @@ def _check_identity(identity: ProducerIdentity | VerifierIdentity, label: str) -
 def validate_verification_plan(plan: VerificationPlan) -> None:
     """Reject a plan unless its proof topology matches its risk.
 
-    Independence is structural, not prompt prose: verifier profile, lineage and
-    context must all differ from the producer.  Verifiers consume named raw
+    Independence is structural, not prompt prose: verifier profile, lineage,
+    and context must differ from the producer. Verifiers consume named raw
     evidence references and may not receive the producer's narrative summary.
     """
 

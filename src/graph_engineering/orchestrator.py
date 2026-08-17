@@ -44,6 +44,11 @@ from .config import (
 )
 from .contracts import validate_workflow
 from .forking import ForkError, verify_lineage
+from .governance import (
+    GovernanceError,
+    enforce_reported_cost_ceiling,
+    validate_runtime_governance,
+)
 from .lifecycle import (
     LifecycleEvent,
     LifecycleStore,
@@ -59,6 +64,12 @@ from .project import (
     execution_identity,
     load_private_execution_binding,
     load_project_policy,
+)
+from .role_policy import (
+    AuthorityError,
+    RolePolicy,
+    RolePolicyBinding,
+    load_role_policy,
 )
 from .runtime import CheckResult, ExecutionContext, Executor, RunResult, Scheduler
 from .worktrees import ChangeSet, Worktree, WorktreeError, WorktreeManager
@@ -223,6 +234,14 @@ class PortableRuntime:
         self.config = config
         self.manager = WorktreeManager(repo)
         self.base_sha = self.manager.resolve_base(base)
+        self.role_policy: RolePolicy | None = None
+        if workflow.get("role_policy") is not None:
+            try:
+                binding = RolePolicyBinding(**workflow["role_policy"])
+                self.role_policy = load_role_policy(self.manager.repo, binding=binding)
+            except (AuthorityError, TypeError) as exc:
+                code = getattr(exc, "code", "ROLE_POLICY_INVALID")
+                raise OrchestrationError(code, str(exc)) from exc
         self.project_policy = project_policy
         if (
             self.project_policy is None
@@ -271,6 +290,15 @@ class PortableRuntime:
                         "repository_digest": self.execution_identity.repository_digest,
                     }
                     if self.project_policy is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "role_policy_version": self.role_policy.version,
+                        "role_policy_generation": self.role_policy.generation,
+                        "role_policy_digest": self.role_policy.digest,
+                    }
+                    if self.role_policy is not None
                     else {}
                 ),
             }
@@ -428,6 +456,20 @@ class PortableRuntime:
                     "MISSING_EXECUTOR",
                     f"node {node['id']!r} has no deterministic executor",
                 )
+
+        if self.role_policy is not None:
+            try:
+                validate_runtime_governance(
+                    self.workflow,
+                    self.nodes,
+                    self.role_policy,
+                    self.config,
+                    self._profiles,
+                    self._fallback_profiles,
+                    self.approvals,
+                )
+            except GovernanceError as exc:
+                raise OrchestrationError(exc.code, exc.message) from exc
 
     def _validate_check_argv(
         self, node: Mapping[str, Any], argv: Sequence[str]
@@ -1007,6 +1049,11 @@ class PortableRuntime:
                 if fallbacks:
                     receipt_key = f"{receipt_key}:{route_id}"
                 self._record_agent_receipt(receipt_key, result.receipt)
+                if self.role_policy is not None:
+                    try:
+                        enforce_reported_cost_ceiling(node, result.receipt)
+                    except GovernanceError as exc:
+                        raise OrchestrationError(exc.code, exc.message) from exc
                 selected_profile = profile
                 break
             if result is None or worktree is None:

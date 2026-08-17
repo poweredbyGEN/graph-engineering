@@ -96,10 +96,15 @@ def test_high_requires_distinct_lenses_and_named_effect_approval():
         (plan,), declared_effects={"build": frozenset({"deploy-production"})}
     )
 
-    colluding = replace(verifier(2), lens=verifier(1).lens)
-    with pytest.raises(RiskPolicyError) as caught:
-        validate_verification_plan(replace(plan, verifiers=(verifier(1), colluding)))
-    assert caught.value.code == "VERIFIER_COLLUSION"
+    for colluding in (
+        replace(verifier(2), profile=verifier(1).profile),
+        replace(verifier(2), lens=verifier(1).lens),
+    ):
+        with pytest.raises(RiskPolicyError) as caught:
+            validate_verification_plan(
+                replace(plan, verifiers=(verifier(1), colluding))
+            )
+        assert caught.value.code == "VERIFIER_COLLUSION"
 
     with pytest.raises(RiskPolicyError) as caught:
         validate_verification_plan(replace(plan, approval=None))

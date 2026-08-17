@@ -16,7 +16,7 @@ import signal
 import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Literal
@@ -127,6 +127,9 @@ class ExecutionReceipt:
     agent_card_digest: str | None = None
     capability_digest: str | None = None
     protocol_version: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_microusd: int | None = None
 
 
 @dataclass(frozen=True)
@@ -136,6 +139,53 @@ class AdapterResult:
     events: tuple[Mapping[str, Any], ...]
     receipt: ExecutionReceipt
     changeset: Any | None = None
+
+
+def _usage_from_events(
+    events: Sequence[Mapping[str, Any]],
+) -> tuple[int | None, int | None, int | None]:
+    """Extract the final bounded provider usage report without guessing prices."""
+
+    aliases = {
+        "input": ("input_tokens", "prompt_tokens", "inputTokens", "promptTokens"),
+        "output": (
+            "output_tokens",
+            "completion_tokens",
+            "outputTokens",
+            "completionTokens",
+        ),
+        "cost_usd": ("cost_usd", "total_cost_usd", "costUsd", "totalCostUsd"),
+    }
+    for event in reversed(events):
+        usage = event.get("usage")
+        candidates = [usage, event] if isinstance(usage, Mapping) else [event]
+        for candidate in candidates:
+            input_tokens = next(
+                (candidate[key] for key in aliases["input"] if key in candidate), None
+            )
+            output_tokens = next(
+                (candidate[key] for key in aliases["output"] if key in candidate), None
+            )
+            cost_usd = next(
+                (candidate[key] for key in aliases["cost_usd"] if key in candidate),
+                None,
+            )
+            if input_tokens is None and output_tokens is None and cost_usd is None:
+                continue
+            if any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or value < 0
+                for value in (input_tokens, output_tokens, cost_usd)
+                if value is not None
+            ):
+                return None, None, None
+            return (
+                int(input_tokens) if input_tokens is not None else None,
+                int(output_tokens) if output_tokens is not None else None,
+                round(float(cost_usd) * 1_000_000) if cost_usd is not None else None,
+            )
+    return None, None, None
 
 
 @dataclass(frozen=True)
@@ -1104,6 +1154,13 @@ def execute_profile(
     except AdapterError as exc:
         exc.receipt = receipt
         raise
+    input_tokens, output_tokens, cost_microusd = _usage_from_events(events)
+    receipt = replace(
+        receipt,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_microusd=cost_microusd,
+    )
     if request.result_schema is not None:
         try:
             jsonschema.validate(value, request.result_schema)
