@@ -6,6 +6,11 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# The installed script imports ops/site_config.py from the repo checkout. Set the
+# site-specific checkout path in a local drop-in (never in this tracked unit):
+#   systemctl edit gen-graphify-nightly  ->  [Service] Environment=AGENT_INFRA_OPS=<ops dir>
+# Without it the /usr/local/sbin copy falls back to its own parent dir and fails,
+# which is how the previous installed copy became a drifted env-var fork.
 ExecStart=/usr/local/sbin/gen-graphify-nightly
 
 # Same 10% ceiling as the post-deploy reconciler and the git-hook rebuilds. Indexing must
