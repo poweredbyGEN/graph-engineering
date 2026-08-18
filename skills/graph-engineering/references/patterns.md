@@ -1,5 +1,17 @@
 # Execution patterns
 
+## Tier selection
+
+Use Graphify or bounded source inspection to identify real artifact and write-scope dependencies.
+Choose `LINEAR` unless at least two useful lanes can overlap and their forecasted benefit exceeds
+setup plus integration. Choose `DURABLE_GRAPH` only when recurrence, recovery, effects, or value
+justify persisted scheduling. A chain represented as a DAG is still a chain and should remain
+linear.
+
+Promote a transient graph only after repeated matched runs beat a direct-loop baseline at the same
+acceptance-suite digest, including cold setup, tokens, cost, accepted integration, and escaped
+defects.
+
 ## Development diamond
 
 ```text
@@ -35,20 +47,29 @@ item is still being inspected. Do not introduce a layer barrier between stages.
 
 ## Risk router
 
-Classify through a schema-bound node, then route deterministically:
+Classify through the closed typed risk-router operation, then route deterministically:
 
-- low risk: one implementation lane plus focused checks;
-- high risk: isolated implementation lanes, diverse reviewers, integration gate;
+- low risk: focused deterministic checks, no mandatory model verifier;
+- medium risk: checks plus one independent fresh-context verifier;
+- high risk: checks, distinct multi-lens verifiers including at least one adversarial refute lens,
+  integration gate, and named human/effect approval;
 - external/destructive: stop after verified preparation and request authority through the
   project's sanctioned process.
 
-Routing belongs in code. A worker cannot decide to skip its own gate.
+Routing belongs in code. A worker cannot classify itself into a weaker gate or skip its own gate.
+Verifier inputs contain raw requirements/source/evidence, not the producer's hidden context or
+summary. Deterministically reduce typed verdicts.
 
 ## Verified fan-out
 
 Use diverse verifier lenses rather than identical votes. A useful code finding must carry a file,
 line or symbol, failure mechanism, and reproduction/check. Deterministically discard duplicates;
 use a model only for judgments that code cannot make.
+
+For high-risk conclusions, frame at least one verifier adversarially: its task is to refute the
+conclusion, defaulting to `refuted` when uncertain, emitting a typed verdict. The conclusion is
+accepted only when refutation demonstrably fails — survival of refutation, not agreement, is the
+pass signal. Combine with the other lenses through the deterministic verdict reducer.
 
 ## Deterministic quorum
 

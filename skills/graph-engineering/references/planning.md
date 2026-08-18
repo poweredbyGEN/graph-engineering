@@ -1,42 +1,35 @@
-# Planning capsule
+# Planning and promotion
 
-The canonical entrypoint is `.graph-engineering/PROJECT.md`. A future agent should need only that
-file to discover `product-contract.json`, `project.json`, `decisions/`, and `workflows/`. Do not add
-a planning database, dashboard, MCP service, or private project brain.
+Use a compact per-run brief for linear and transient work: goal, in-scope targets, exclusions,
+acceptance evidence, and authority — plus, for any metric-moving objective, at least one guard
+metric that would expose the target being satisfied against its intent (the Goodhart failure:
+resolution rate up, churn doubled). Resolve missing facts from tracked source and existing
+decisions; ask a human only when the answer changes product behavior, authority, or acceptance.
 
-## Discover before asking
+Do not require a repository planning capsule, workflow manifest, private profiles, deployment
+metadata, or named-human freeze merely to inspect code, run a bounded audit, or fan out isolated
+local changes.
 
-Run `graph-engineer assess --repo "$PWD" --json`, then `graph-engineer init --repo "$PWD" --json`.
-If the capsule exists, read `PROJECT.md` first and follow its links. Reuse its frozen generation and
-matching active run. If it does not exist, init scaffolds a draft capsule.
+Create or update `.graph-engineering/PROJECT.md` and its versioned product contract only when the
+workflow is recurring, durable, product-ambiguous, or governed across operators. The reviewed
+capsule may then hold users, outcomes, journeys, surfaces, data, permissions, invariants,
+compatibility, recovery, rollout/rollback, live proof, risks, assumptions, decisions, and acceptance.
 
-Treat `init.unresolved` as the question queue. Inspect tracked code and existing decisions for facts,
-then ask the human only the questions still listed. Never replace a missing product answer with a
-model guess. For UI, API, events, jobs, integrations, tables, stores, migrations, permissions,
-compatibility, risks, assumptions, or open decisions, record either bounded items or a specific N/A
-reason. `N/A` without a reason is not an answer.
+A slow RolePolicy owns capability and effect ceilings. A fast WorkGraph references that policy and
+may only narrow it. Product-answer changes invalidate derived durable templates; ordinary task or
+dependency changes do not require rewriting the full product contract.
 
-## Complete one generation
+## Promotion gate
 
-Keep the human brief and machine contract aligned. The contract must answer problem, users,
-outcomes, in/out scope, journeys, all surfaces and data axes, auth/permissions, invariants,
-compatibility, failure/recovery, rollout, rollback, live proof, risks, assumptions/hypotheses with
-status and evidence, and open decisions with owners. Acceptance criteria use one of:
+Promote a transient graph into a durable reviewed template only when all are true:
 
-- `deterministic`: shell-free argv is required and `human_gate` is false;
-- `human_gate`: argv is null and `human_gate` is true.
+1. multiple matched executions use the same objective class and acceptance-suite digest;
+2. a direct-loop baseline exists;
+3. cold setup and steady-state time are both reported;
+4. token and cost data are present;
+5. the graph improves the declared latency/quality/cost objective without worse escaped defects;
+6. every declared guard metric is reported and none regresses unexplained — an objective met by
+   betraying its guard metric is a failed run, not a win;
+7. a named human reviews the evidence and explicitly accepts the durable RolePolicy and template.
 
-Append durable choices under `decisions/` and its index; do not silently rewrite an accepted record.
-Update the brief and decision-index SHA-256 bindings, then update the canonical product-contract
-digest in `project.json` and every derived workflow binding.
-
-## Freeze before fan-out
-
-A model cannot approve its own plan. A named human must explicitly approve the complete answers;
-only then set `freeze.status` to `approved` and record `freeze.approved_by`. Run init again. Do not
-perform the dependency audit, create worker nodes, or dispatch subagents until init reports no
-planning questions and validates every digest.
-
-Any changed answer, brief, or accepted decision invalidates derived work. Increment generation,
-return it to draft, obtain fresh human approval, update all digests/bindings, and only then resume
-graph design. Never silently mix work from two generations.
+Promotion is a product decision, never an automatic runtime side effect.

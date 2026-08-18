@@ -1,4 +1,4 @@
 interface:
   display_name: "Graph Engineering"
-  short_description: "Build faster with tested agent graphs"
-  default_prompt: "Use $graph-engineering to turn this development task into a bounded, verified agent graph and execute it."
+  short_description: "Choose linear, transient, or durable execution"
+  default_prompt: "Use $graph-engineering to choose and execute the simplest evidence-gated workflow for this task."

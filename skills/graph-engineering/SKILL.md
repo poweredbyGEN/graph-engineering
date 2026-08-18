@@ -1,236 +1,211 @@
 ---
 name: graph-engineering
-description: Plan and execute substantial software work as an evidence-gated dependency graph with parallel subagents, isolated writes, deterministic tests, quorum joins, localized retries, independent review, remote A2A workers, and an explicit integration node. Use when the user asks for graph-style development, a workflow, parallel agents, mixed local or remote workers, verifier consensus, a migration or audit across many files, or a feature with at least three independent work lanes or real ordering constraints. Skip graph overhead for small tasks whose steps are genuinely sequential.
+description: "Choose and execute the simplest evidence-gated software workflow: a linear agent loop by default, native transient fan-out for proven independent lanes, or the durable graph runtime for repeated, long-running, high-value, resumable, or effectful work. Use for substantial multi-file work, parallel agents, workflow orchestration, migrations, broad audits, independent verification, mixed workers, durable resume, or when Graphify can reveal real code dependencies. Also use when asked to set up, install, or configure graph engineering on a machine or repository. Do not require graph ceremony for small, sequential, or one-off tasks."
 ---
 
 # Graph Engineering
 
-Turn complex development work into a bounded graph whose scheduler—not an agent's narrative—
-decides what is ready and whose checks—not an agent's confidence—decide what is done.
+Use Graphify as the map, the host agent as the ordinary scheduler, and the portable runtime only
+when durability pays. Checks—not agent confidence—decide acceptance.
 
+## 1. Choose the execution tier
 
-## Fan out by default — you are the orchestrator, not the worker
+Start from the task, not repository maturity. When `graphify-out/graph.json` exists, query it before
+raw code searches and validate that returned source paths are tracked. Otherwise inspect the
+bounded source and existing project evidence directly.
 
-**The default execution mode is parallel subagents.** When this skill is invoked, your job
-is to decompose, assign, and integrate — not to implement lanes yourself. Doing the lanes
-serially in your own context is the failure mode this skill exists to replace.
+Classify the work as exactly one tier:
 
-1. **Decompose first.** Run the dependency audit; every node with no incoming real edge is
-   immediately dispatchable. Sequence you invented is not dependency (the fake edge test).
-2. **One agent per lane, one lane per agent.** Each writing node gets its own subagent in
-   its own isolated worktree. Never two agents on one target; never one agent on two lanes.
-   Use whatever the host provides: Claude Code Task/Agent tool, `codex exec`, `grok -p`,
-   A2A remote workers — the profile, not the graph, decides the engine.
-3. **You orchestrate:** dispatch ready nodes, watch evidence come back (`graph-engineer
-   watch --run-id … --pane <herdr-pane>` keeps a live status surface), retry ONLY the
-   failed lane, and own the integration node yourself. Supervise ~every 30–60s of activity;
-   reap finished or stuck lanes — high fan-out is fine, stale duplicates are not.
-4. **Evidence gates every lane.** A lane is done when its deterministic check passes and
-   survives independent refutation — never when its agent says so.
-5. **Scale honestly.** 3+ independent lanes → fan out. Genuinely sequential steps → say so
-   and skip graph overhead; a graph bought for one lane is rigidity for nothing.
+- **LINEAR** — default. One goal/domain/stop condition, no useful parallel frontier, or setup and
+  integration would erase the expected benefit. Use one evidence loop plus project checks.
+- **TRANSIENT_GRAPH** — at least two useful lanes can overlap, their inputs and write scopes are
+  separable, and forecasted wall-time/context/quality benefit exceeds orchestration tax. Use native
+  subagents, isolated worktrees, an orchestrator ledger, and one integration owner. No project
+  capsule, workflow JSON, state database, or named-human freeze is required for read-only/local work.
+- **DURABLE_GRAPH** — the task is repeated, long-running, high-value/high-risk, resumable across
+  failures/sessions, or effectful enough to justify leases, fencing, checkpoints, approvals, and
+  durable receipts. Use the portable runtime.
 
-## 1. Decide whether a graph pays
+Do not use file count, available tests, or multiple possible reviewers as sufficient evidence for
+a graph. Apply the fake-edge test: an edge exists only when exact data, authority, quota, or an
+unsafe shared resource crosses it.
 
-Use graph execution when at least two of these are true:
-
-- three or more useful work items can run independently;
-- one prerequisite unlocks several downstream items;
-- the change spans about five or more files, components, routes, or repositories;
-- different engines or reviewers can handle bounded portions;
-- prior attempts lost context, collided, or repeated whole-task work after one failure;
-- success can be graded by tests, lint, types, schemas, builds, or probes.
-
-For a small edit or a true chain, state that graph overhead will not help and execute normally.
-Never manufacture parallelism by giving multiple agents the same target.
-
-For an existing or new repository, begin with the read-only adoption audit:
+For the portable runtime, run the task-specific chooser when available:
 
 ```bash
-graph-engineer assess --repo "$PWD" --json
+graph-engineer choose --task task.json --repo "$PWD" --json
 ```
 
-If graph execution pays, run `graph-engineer init --repo "$PWD" --json`. This discovers reviewed
-workflows and matching durable runs, or scaffolds the minimal public project boundary when none
-exists. Inspect and complete any scaffolded product contract, checks, write roots, and deployment
-metadata; configure private profiles outside the repository; then rerun `init`. To consume a saved
-assessment, pass `--from-assessment <path>`—the CLI rejects it if HEAD or tracked/untracked source
-changed. Resume a matching active run instead of creating a duplicate. Assessment and init never
-infer secrets, approvals, MCP/A2A transport, deployment targets, or permission to perform effects.
+Treat repository probes as advisory evidence. A missing type checker, capsule, worker profile, or
+workflow does not mean a linear or transient task is invalid.
 
-When a model proposes the workflow, never copy its JSON directly into `workflows/` and run it.
-Create an assessment outside the repository, compile the candidate into an inert digest-bound
-proposal, and have the named product-contract approver accept that exact proposal:
+A LINEAR run that leaves `graph_task_*`, the durable runtime, and fan-out unused is the skill
+succeeding, not failing. Report it as "tier choice correct; graph machinery not required" — never
+as machinery overhead or as evidence the skill did not help. Machinery invoked on a task that did
+not need it is the failure mode; machinery correctly left cold is the success mode.
 
-```bash
-graph-engineer compile --repo "$PWD" --assessment /safe/assessment.json \
-  --candidate /safe/candidate.workflow.json --proposed-by planning-model \
-  --output /safe/candidate.proposal.json --json
-graph-engineer accept --repo "$PWD" \
-  --proposal /safe/candidate.proposal.json \
-  --proposal-digest <digest-from-compile> --reviewed-by '<frozen named approver>' \
-  --workflow-output .graph-engineering/workflows/candidate.workflow.json \
-  --acceptance-output .graph-engineering/reviews/candidate.acceptance.json --json
+## 2. Establish the run brief and authority
+
+Every tier needs a compact immutable brief:
+
+```json
+{
+  "goal": "one outcome",
+  "in_scope": ["bounded targets"],
+  "out_of_scope": ["explicit exclusions"],
+  "acceptance": ["deterministic evidence"],
+  "guard_metrics": ["countermetric exposing a gamed objective; required for metric-moving goals"],
+  "authority": "read|local_write|external|destructive"
+}
 ```
 
-Compilation validates schemas, project policy, the frozen contract, assessment source, effects,
-and budgets but grants no dispatch authority. Acceptance fails on source/contract drift,
-self-approval, reviewer mismatch, or digest mismatch. Only run the accepted workflow artifact.
+An objective stated as moving a metric (increase, reduce, maximize a rate/count/score) must name at
+least one **guard metric**: an independent signal that would expose the target metric being
+satisfied against its intent — the Goodhart failure, e.g. "ticket resolution rate up" achieved by
+closing conversations early while churn doubles. Acceptance is not met while a guard metric
+regresses unexplained. Pure evidence acceptance (tests pass, exact SHA deployed, artifact read
+back) needs no guard metric.
 
-Before any dependency audit or worker fan-out, read
-[references/planning.md](references/planning.md). Discover the repository capsule, ask only its
-missing product questions, and require a named human to approve the frozen generation. `init` must
-report no planning questions and no brief/decision/contract drift before graph construction begins.
+Read project instructions and inspect existing tests, lint, types, builds, probes, git state, and
+worktree rules. Never infer permission to merge, deploy, message, mutate credentials, write
+production, or perform destructive actions from a graph.
 
-## 2. Establish the authority and scope
+For a recurring product workflow, read [references/planning.md](references/planning.md) and promote
+the compact brief into a reviewed project capsule. A capsule is optional for transient work.
 
-Before drawing nodes:
+## 3. Separate RolePolicy from WorkGraph
 
-1. Read the project instructions and inspect its existing tests, linters, type checks, build,
-   git state, and worktree rules.
-2. Define the final artifact and the deterministic evidence required to accept it.
-3. Identify protected or externally visible actions. Graph execution never grants deployment,
-   merge, messaging, credential, production-write, or destructive authority.
-4. Choose the execution mode:
-   - **Portable runtime:** read [references/runtime-guide.md](references/runtime-guide.md) in full,
-     run `graph-engineer doctor`, then follow its start, status, resume, and handoff procedure.
-   - **Native fallback:** use the host's subagent primitives and state that fencing, durable resume,
-     schema-bound artifact transfer, and typed repair edges are not mechanically enforced.
+Treat authority as a slow, versioned **RolePolicy**: profile capabilities, tool access, write roots,
+effect ceilings, deployment targets, approvals, network boundaries, and cost ceilings.
 
-## 3. Perform the dependency audit
+Treat tasks, artifact dependencies, conditions, and iteration as the fast **WorkGraph**. A WorkGraph
+may narrow RolePolicy authority; it must never add a capability, scope, effect, target, approval,
+or budget absent from RolePolicy. Validate the effective intersection before dispatch and again on
+resume or policy drift.
 
-For every proposed edge ask: **what exact data or constrained resource crosses this edge?**
+## 4. Build executable nodes and edges
 
-Create an edge only when the consumer needs a producer artifact, both nodes share an unsafe write
-target, a schema/interface must land first, or a real quota/permission constraint serializes them.
-Words such as “then” and “after that” are not dependencies.
+Use models only for judgment and implementation. Use the runtime's closed deterministic operations
+for plumbing:
 
-Every node must have:
+- JSON Schema validation;
+- select/map;
+- stable union and dedupe;
+- deterministic sort;
+- typed predicates;
+- risk routing;
+- typed verdict reduction.
 
-- one bounded job and stable ID;
-- explicit inputs and expected outputs;
-- an output schema or artifact contract;
-- engine/model tier and permission level;
-- workspace mode and non-overlapping write scope;
-- timeout, bounded retry, and deterministic acceptance command;
-- failure policy: required, optional, or quorum;
-- downstream consumers.
+Never use arbitrary expressions, model prose, shell evaluation, or worker self-routing as an edge.
+Conditional routes must name typed predicates and declared destinations. Cycles must be explicit,
+checkpointed, and bounded by iteration, attempt, time, no-progress, token, and cost ceilings.
 
-Read [references/workflow-contract.md](references/workflow-contract.md) before writing or changing a
-machine-readable workflow. The CLI accepts JSON only. Reject cycles, missing producers, ambiguous
-input bindings, unbounded fan-out/retries, and parallel writes without isolation before launching.
+For machine-readable durable workflows, read
+[references/workflow-contract.md](references/workflow-contract.md). For topology and native fleet
+operation, read [references/patterns.md](references/patterns.md).
 
-## 4. Schedule the frontier
+## 5. Execute the ready frontier
 
-Prefer a ready queue or streaming pipeline: launch a node as soon as its own dependencies pass and
-a concurrency slot is free. Do not wait for unrelated slow siblings.
+For `TRANSIENT_GRAPH`, fan out distinct ready lanes immediately:
 
-Use a barrier only for a real cross-set operation such as complete-set comparison, deduplication,
-ranking, quorum, or integration. Count `received` versus `expected` at every fan-in and name missing
-items. For large fan-ins, consolidate in bounded layers without discarding file paths, errors, or
-evidence.
+1. one agent per lane and one lane per agent;
+2. one isolated nested worktree per writing lane;
+3. minimal context: task, required source, typed inputs/outputs, authority, and checks;
+4. one orchestrator-owned live-worker ledger with no duplicate target/PR/ticket/protocol;
+5. monitor every active lane about every 30–60 seconds;
+6. validate returned artifacts and exact checks before unlocking consumers;
+7. retry only the failed lane and invalidated descendants;
+8. one integration owner runs the combined gate.
 
-Declare join semantics in the consumer contract, never in its prompt. Use `any`, `n_of_m`, or
-`majority` only over optional independent producers; their failures are settlements, not global run
-failures. These policies count successful node settlements, not `true` values inside model output.
-For semantic voting, collect typed verdicts and reduce them with deterministic code. Use
-`all_settled` when the consumer needs every optional terminal outcome, and `all` when every
-dependency must pass. Persist the exact decision snapshot that released or blocked the consumer.
-Quorum is useful for availability and bounded evidence collection; it does not turn model agreement
-into deterministic code correctness.
+For `DURABLE_GRAPH`, read [references/runtime-guide.md](references/runtime-guide.md), run preflight,
+and let the runtime own readiness, leases, fencing, receipts, checkpoint/resume, and typed repair.
 
-Prioritize the neck: ready nodes that unlock the most downstream work. Cap concurrency by actual
-independent targets, agent capacity, rate limits, and workspace safety—not an aspirational number.
-Follow the fleet-supervision procedure in
-[references/patterns.md](references/patterns.md): keep one orchestrator-owned ledger, prevent
-duplicate live attempts, monitor every claimed node, fence late workers, validate returned
-artifacts, and reap completed processes. Fan-out is not fire-and-forget.
+## 6. Apply risk-based verification
 
-## 5. Execute nodes with isolation
+Risk determines verification; model review is not mandatory ceremony:
 
-- Give each writing node its own nested git worktree or equivalent sandbox.
-- Give every worker only its task, required source context, output contract, allowed tools, and
-  acceptance command. Do not dump the orchestrator's full conversation into every node.
-- Keep deterministic plumbing—filtering, flattening, stable dedupe, schema validation, routing—
-  in code. Use models for judgment and implementation.
-- Run mechanical extraction/classification on a fast tier, implementation on the standard tier,
-  and fresh-context adjudication on the strongest justified tier.
-- Record failures as structured results. One optional branch failure must not discard independent
-  successes.
+- **low** — deterministic checks only;
+- **medium** — checks plus one independent fresh-context verifier;
+- **high** — checks plus distinct multi-lens verifiers, at least one running an adversarial refute
+  lens, and a named human/effect approval boundary;
+- **external/destructive** — preparation and verification do not grant execution authority.
 
-Prefer local subprocess profiles for locally controlled CLIs. Use MCP for bounded tools, data, or
-durable task capabilities. Use A2A only to delegate one typed node to an independently operated
-remote agent; the graph runtime remains the scheduler and local checks remain the acceptance
-authority. Read [references/extending.md](references/extending.md) before adding either boundary.
+An independent verifier must not inherit the producer's hidden context or summary. Give it the
+requirements, raw source/diff, raw evidence, and its explicit lens. Where profile diversity is
+available, do not use the producer identity as its own verifier. Reduce typed verdicts with
+deterministic code; agreement alone is not correctness.
 
-Exactly one orchestrator owns integration, merge, deploy, or other shared single-writer surfaces.
-Workers never self-integrate or self-deploy.
+An **adversarial refute** verifier is tasked to overturn the conclusion, not to review it: it must
+attempt to refute, default to `refuted` when uncertain, and emit a typed verdict. The conclusion
+passes only when the refutation demonstrably fails. Survival of refutation — not agreement — is the
+pass signal for high-risk work.
 
-## 6. Gate edges on deterministic evidence
+## 7. Gate and recover
 
-Run the node's existing project checks before model review. A zero agent exit code is not proof;
-a nonzero agent exit code does not invalidate a correct artifact if the authoritative checks pass.
+Run existing deterministic checks before model review. When a check fails:
 
-When a check fails:
+1. preserve exact structured failure evidence;
+2. retry only the responsible node and artifact descendants;
+3. fence late results;
+4. stop at attempt, no-progress, iteration, time, token, and cost ceilings;
+5. repair the task, prerequisite, route, or check when failure evidence repeats.
 
-1. return the exact failure and prior-attempt summary to the responsible node;
-2. retry only that node and invalidated descendants;
-3. stop after the configured attempt/no-progress ceiling;
-4. re-plan when the same failure class repeats rather than increasing the budget.
+Sabotage-check every new checker: break the protected behavior, prove the checker fails, restore it,
+and prove it passes.
 
-When adding a new checker, sabotage-check it: break the protected behavior, prove the checker
-fails, restore the behavior, and prove it passes.
+Treat progress as a monotonic evidence transition, never as activity. Progress is exactly one of:
 
-## 7. Review independently, then integrate
+- a newly accepted immutable artifact bound to current input/policy/source digests;
+- a deterministic reduction in the unresolved set;
+- movement through an evidence-bound lifecycle such as verified → integrated → exact-SHA green →
+  merged → deployed-SHA read back → live proof.
 
-After deterministic checks pass, use a fresh-context verifier for material changes. Give it the
-requirements, source/diff, and raw evidence—not the implementer's summary. Ask it to reproduce or
-refute specific claims through distinct lenses such as correctness, security, composition, and
-regression risk.
+Agent completion, worker count, retries, elapsed time, logs, prose summaries, open PRs, and checks
+against an older source/input digest are not progress. When an input, policy, source SHA, acceptance
+suite, or observation freshness binding changes, invalidate all affected descendants before
+reporting forward movement. Every recurring status report must state the accepted delta, invalidated
+delta, active unique nodes, exact next frontier, and whether the unresolved set shrank. If none of
+those changed, report **no progress** plainly.
 
-The final node integrates accepted changes and runs the combined project gate again. Independently
-green lanes are not proof that their combination is green. Detect conflicts and interface drift
-before promotion; preserve failed work for diagnosis according to project policy.
+## 8. Measure whether the graph paid
 
-When an integration check has a known responsible producer, use an explicit typed repair route.
-Never infer a repair target from prose or replay a writer without an explicit replay-safe effect.
+Record per objective and per run:
 
-See [references/patterns.md](references/patterns.md) for diamonds, routers, verified fan-out,
-converging discovery, and the canonical `dev-change` graph.
+- cold setup/adoption time and steady-state wall time;
+- input/output tokens, model, and monetary cost per node and total;
+- deterministic gate results, retries, repeated failures, and integration failures;
+- verifier overturns and human corrections;
+- accepted integrated outcome and time to merged/deployed/live proof when applicable;
+- declared objective metrics and their guard metrics — a run that moves the target while a guard
+  metric regresses unexplained is a failed outcome, not a win;
+- baseline identity and equal acceptance-suite digest.
 
-## 8. Report the graph result
+Do not treat invocation count, artifact count, raw overlap, or nonzero fail-closed exits as product
+success/failure. Compare accepted integrated outcomes at equal evidence quality.
 
-Report:
+Promote a transient graph to a reviewed durable template only after repeated matched runs prove it
+beats a direct-loop baseline on the declared latency/quality/cost objective, includes cold setup,
+reports cost, does not worsen escaped defects, and does not regress any declared guard metric.
+Human review approves promotion; the runtime must never promote itself.
 
-- graph shape and critical path;
-- expected, received, passed, failed, skipped, and retried nodes;
-- engine/model and worktree for each writing node;
-- exact deterministic commands and their results;
-- verifier findings and integration outcome;
-- wall time, useful overlap, token/cost data when available;
-- evidence-bound benchmark metrics, leaving unavailable human/review/deploy measurements null;
-- the versioned lifecycle trace and exact join settlement that released each quorum consumer;
-- remaining blockers or unverified assumptions.
+## 9. Report precisely
 
-After material human feedback or a failed/overturned check, compile it with
-`graph-engineer feedback` into a reviewed regression-test, project-decision, workflow, or local
-skill proposal. Prefer a sabotage-capable regression whenever a command can enforce the lesson.
-Never auto-apply feedback, silently rewrite a frozen product generation, or share a skill proposal.
-Use `graph-engineer benchmark` to compare evidence-bound graph outcomes with a separately recorded
-ordinary-session baseline; never fill unavailable metrics with model estimates.
-
-Say whether the result is implemented, integrated, merged, deployed, and verified live. These are
-different states. Never call a plan, agent message, green lane, or open pull request “done.”
+Report the chosen tier and why, actual parallel frontier, lanes and worktrees, checks and results,
+verification appropriate to risk, retries/failures, integration outcome, wall/setup time, tokens
+and cost, and remaining assumptions. Distinguish implemented, integrated, merged, deployed, and
+verified live.
 
 ## Reference routing
 
-- Read [references/planning.md](references/planning.md) before planning a feature, changing a frozen
-  outcome, drawing dependencies, or dispatching workers.
-- Read [references/runtime-guide.md](references/runtime-guide.md) for installation, private worker
-  profiles, starting a workflow, status/resume, MCP registration, and troubleshooting.
-- Read [references/workflow-contract.md](references/workflow-contract.md) before authoring workflow
-  JSON or changing node, edge, budget, effect, artifact, or repair contracts.
-- Read [references/patterns.md](references/patterns.md) when selecting topology or deciding between
-  a ready queue, streaming pipeline, barrier, router, verifier, cycle, or checkpoint.
-- Read [references/extending.md](references/extending.md) before changing this skill/runtime, adding
-  an agent adapter, creating an MCP service, or expanding a tool/capability surface.
+- Read [references/setup.md](references/setup.md) when asked to set up, install, verify, or
+  configure graph engineering — the runtime, private workers, or MCP registration — on a machine
+  or repository.
+- Read [references/planning.md](references/planning.md) only for recurring product workflows or
+  unresolved product ambiguity—not every transient task.
+- Read [references/workflow-contract.md](references/workflow-contract.md) before changing durable
+  workflow contracts, deterministic operations, routes, cycles, budgets, effects, or artifacts.
+- Read [references/patterns.md](references/patterns.md) for transient fan-out, dependency audits,
+  routing, risk verification, integration, and fleet supervision.
+- Read [references/runtime-guide.md](references/runtime-guide.md) only for `DURABLE_GRAPH`.
+- Read [references/extending.md](references/extending.md) before changing the skill/runtime or adding
+  adapters, operations, topologies, policy surfaces, MCP, or A2A.

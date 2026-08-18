@@ -5,23 +5,32 @@ MCP service. Extend contracts and evidence, not prose promises.
 
 ## Invariants
 
-1. Nodes are bounded jobs; edges exist only for real data or constrained-resource flow.
-2. Deterministic plumbing stays in code. Models implement or judge; they do not flatten, route,
+1. LINEAR is the default; a graph requires a proven parallel frontier or durable recovery/effect
+   value. Repository maturity is not task eligibility.
+2. Nodes are bounded jobs; edges exist only for real data or constrained-resource flow.
+3. Deterministic plumbing stays in a closed operation registry. Models implement or judge; they do not flatten, route,
    deduplicate, claim, or decide their own acceptance.
-3. Validate every input/output edge. Unknown fields and unsupported capabilities fail closed.
-4. Schedule the ready frontier. Add a barrier only for a complete-set dependency.
-5. Isolate parallel writes and give one integration node the shared writer role.
-6. Classify effects before retry/resume. Unknown writes are not replay-safe.
-7. Persist identity, base SHA, attempts, artifacts, receipts, capabilities, and deadlines. Resume
+4. Validate every input/output edge, typed predicate, route, and cycle checkpoint. Unknown fields
+   and unsupported capabilities fail closed.
+5. Schedule the ready frontier. Add a barrier only for a complete-set dependency.
+6. Isolate parallel writes and give one integration node the shared writer role.
+7. Classify effects before retry/resume. Unknown writes are not replay-safe.
+8. Separate slow RolePolicy ceilings from fast WorkGraph definitions. Work may narrow authority but
+   can never expand it.
+9. Persist identity, base SHA, attempts, artifacts, receipts, capabilities, route decisions, cycle
+   checkpoints, and deadlines. Resume
    does not create a new budget or silently change a worker.
-8. Deterministic checks precede independent model review. Combined gates follow integration.
-9. Every loop has attempt, no-progress, wall-time, node, and cost ceilings.
-10. Skills describe procedures; MCP exposes capabilities; neither grants authority.
-11. Public code contains templates and environment-variable names only. Private registries,
+10. Risk determines verification: low checks-only; medium independent verifier; high multi-lens plus
+    named human/effect approval. Combined gates follow integration.
+11. Every loop has iteration, attempt, no-progress, wall-time, node, token, and cost ceilings.
+12. Skills describe procedures; MCP exposes capabilities; neither grants authority.
+13. Public code contains templates and environment-variable names only. Private registries,
     endpoints, credentials, and organization policy remain user-side.
-12. Turn every enforceable lesson into a regression and sabotage-check it.
-13. Keep the transport layers distinct: MCP exposes capabilities; A2A delegates to an independent
+14. Turn every enforceable lesson into a regression and sabotage-check it.
+15. Keep the transport layers distinct: MCP exposes capabilities; A2A delegates to an independent
     agent; the graph runtime alone owns control flow and acceptance.
+16. Durable-template promotion requires repeated matched evidence against a direct-loop baseline;
+    the runtime never promotes itself.
 
 ## Change procedure
 
