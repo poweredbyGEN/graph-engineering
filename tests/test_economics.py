@@ -35,6 +35,7 @@ def outcome(match: str, mode: str, *, wall: float, cost: float | None = 1.0):
         "integration_failures": 0,
         "escaped_defects": 0,
         "failure_class": "none",
+        "guard_metrics": [],
         "merged_proof_seconds": 8,
         "deployed_proof_seconds": 10,
         "live_proof_seconds": 12,
@@ -161,3 +162,67 @@ def test_cli_outcome_records_and_stats_reports_economics(tmp_path, monkeypatch, 
     assert report["merged_proofs"] == 1
     assert report["deployed_proofs"] == 1
     assert report["live_proofs"] == 1
+
+
+def test_legacy_v1_outcome_still_validates_without_guard_metrics():
+    value = outcome("a", "LINEAR", wall=10)
+    value["version"] = "graph-engineering/outcome/v1"
+    del value["guard_metrics"]
+    record = validate_outcome(value)
+    assert record["version"] == "graph-engineering/outcome/v1"
+    assert "guard_metrics" not in record
+
+
+def test_accepted_outcome_cannot_carry_a_regressed_guard_metric():
+    # intent: Goodhart guard. "Resolution rate up while churn doubled" must be
+    # unrepresentable as an accepted outcome.
+    value = outcome("a", "TRANSIENT_GRAPH", wall=10)
+    value["guard_metrics"] = [{"name": "churn_rate", "regressed": True}]
+    with pytest.raises(EconomicsError, match="guard metric is regressed"):
+        validate_outcome(value)
+    value["accepted"] = False
+    value["failure_class"] = "expected_rejection"
+    record = validate_outcome(value)
+    assert record["guard_metrics"] == [{"name": "churn_rate", "regressed": True}]
+
+
+def test_guard_metric_entries_are_closed_and_bounded():
+    value = outcome("a", "LINEAR", wall=10)
+    value["guard_metrics"] = [{"name": "churn_rate", "regressed": False, "extra": 1}]
+    with pytest.raises(EconomicsError, match="guard_metrics entries"):
+        validate_outcome(value)
+    value["guard_metrics"] = [{"name": "", "regressed": False}]
+    with pytest.raises(EconomicsError, match="guard_metrics entries"):
+        validate_outcome(value)
+    value["guard_metrics"] = "churn"
+    with pytest.raises(EconomicsError, match="guard_metrics must be a list"):
+        validate_outcome(value)
+
+
+def test_promotion_rejects_pairs_with_regressed_guard_metrics():
+    records = [dict(record) for record in matched()]
+    # Bypass validate_outcome deliberately: promotion must reject a regressed
+    # guard metric even on records that dodged the acceptance-time guard.
+    records[1]["guard_metrics"] = [{"name": "churn_rate", "regressed": True}]
+    report = promotion_evidence(records)
+    assert report["eligible"] is False
+    assert any(
+        item["reason"] == "a run reports a regressed guard metric"
+        for item in report["rejected"]
+    )
+
+
+def test_summary_counts_guard_metric_regressions(tmp_path, monkeypatch):
+    log = tmp_path / "outcomes.jsonl"
+    monkeypatch.setenv("GRAPH_ENGINEERING_OUTCOME_LOG", str(log))
+    value = outcome("regressed", "TRANSIENT_GRAPH", wall=10)
+    value["accepted"] = False
+    value["failure_class"] = "expected_rejection"
+    value["guard_metrics"] = [{"name": "churn_rate", "regressed": True}]
+    from graph_engineering.economics import record_outcomes
+
+    record_outcomes([validate_outcome(value)])
+    record_outcomes([validate_outcome(outcome("clean", "LINEAR", wall=10))])
+    report = summarize_outcomes()
+    assert report["total"] == 2
+    assert report["guard_metric_regressions"] == 1

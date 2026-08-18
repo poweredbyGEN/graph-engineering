@@ -12,7 +12,8 @@ from typing import Any
 
 from .artifacts import canonical_json
 
-OUTCOME_VERSION = "graph-engineering/outcome/v1"
+OUTCOME_VERSION = "graph-engineering/outcome/v2"
+_LEGACY_OUTCOME_VERSIONS = {"graph-engineering/outcome/v1"}
 PROMOTION_VERSION = "graph-engineering/promotion/v1"
 _MODES = {"LINEAR", "TRANSIENT_GRAPH", "DURABLE_GRAPH"}
 _FAILURES = {"none", "expected_rejection", "operational_failure"}
@@ -30,6 +31,7 @@ class EconomicsError(ValueError):
 def validate_outcome(value: Mapping[str, Any]) -> dict[str, Any]:
     required = {
         "version",
+        "guard_metrics",
         "id",
         "match_id",
         "task_id",
@@ -53,7 +55,16 @@ def validate_outcome(value: Mapping[str, Any]) -> dict[str, Any]:
         "live_proof_seconds",
         "evidence",
     }
-    if set(value) != required or value.get("version") != OUTCOME_VERSION:
+    version = value.get("version")
+    if version in _LEGACY_OUTCOME_VERSIONS:
+        # Legacy records predate guard metrics; validate and digest them under
+        # their own field set so existing outcome logs stay verifiable.
+        required = required - {"guard_metrics"}
+    elif version != OUTCOME_VERSION:
+        raise EconomicsError(
+            "OUTCOME_INVALID", "outcome has unexpected fields or version"
+        )
+    if set(value) != required:
         raise EconomicsError(
             "OUTCOME_INVALID", "outcome has unexpected fields or version"
         )
@@ -71,6 +82,32 @@ def validate_outcome(value: Mapping[str, Any]) -> dict[str, Any]:
         )
     if not isinstance(value["accepted"], bool):
         raise EconomicsError("OUTCOME_INVALID", "accepted must be boolean")
+    if version == OUTCOME_VERSION:
+        guards = value["guard_metrics"]
+        if not isinstance(guards, list) or len(guards) > 32:
+            raise EconomicsError(
+                "OUTCOME_INVALID", "guard_metrics must be a list of at most 32 entries"
+            )
+        for entry in guards:
+            if (
+                not isinstance(entry, dict)
+                or set(entry) != {"name", "regressed"}
+                or not isinstance(entry["name"], str)
+                or not entry["name"].strip()
+                or len(entry["name"]) > 256
+                or not isinstance(entry["regressed"], bool)
+            ):
+                raise EconomicsError(
+                    "OUTCOME_INVALID",
+                    "guard_metrics entries must be {name, regressed}",
+                )
+        # intent: Goodhart guard. An objective satisfied while a declared
+        # countermetric regresses is a failed outcome, never a win.
+        if value["accepted"] and any(entry["regressed"] for entry in guards):
+            raise EconomicsError(
+                "OUTCOME_INVALID",
+                "accepted cannot be true while a guard metric is regressed",
+            )
     normalized = dict(value)
     for field in (
         "wall_seconds",
@@ -199,6 +236,10 @@ def summarize_outcomes() -> dict[str, Any]:
             record["integration_failures"] for record in records
         ),
         "escaped_defects": sum(record["escaped_defects"] for record in records),
+        "guard_metric_regressions": sum(
+            any(entry["regressed"] for entry in record.get("guard_metrics", ()))
+            for record in records
+        ),
         "expected_rejections": sum(
             record["failure_class"] == "expected_rejection" for record in records
         ),
@@ -246,6 +287,18 @@ def promotion_evidence(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         if not base["accepted"] or not candidate["accepted"]:
             rejected.append(
                 {"match_id": match_id, "reason": "both runs must pass acceptance"}
+            )
+            continue
+        if any(
+            entry.get("regressed")
+            for run in (base, candidate)
+            for entry in run.get("guard_metrics", ())
+        ):
+            rejected.append(
+                {
+                    "match_id": match_id,
+                    "reason": "a run reports a regressed guard metric",
+                }
             )
             continue
         if base["cost_usd"] is None or candidate["cost_usd"] is None:
