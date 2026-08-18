@@ -8,6 +8,10 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- Outcome contract v2 with declared guard metrics: an accepted outcome cannot carry a regressed
+  countermetric (Goodhart guard), promotion rejects matched pairs with regressed guard metrics,
+  and summaries count guard-metric regressions. Legacy v1 outcome records remain verifiable.
+
 - Reviewed workflow compilation: model proposals are bound to the frozen product contract,
   repository assessment, and exact digest, then require distinct named-human acceptance.
 - Typed finite read-only profile fallback and reusable profile-fallback/evaluator-repair examples;
