@@ -1,6 +1,6 @@
 ---
 name: graph-engineering
-description: "Choose and execute the simplest evidence-gated software workflow: a linear agent loop by default, native transient fan-out for proven independent lanes, or the durable graph runtime for repeated, long-running, high-value, resumable, or effectful work. Use for substantial multi-file work, parallel agents, workflow orchestration, migrations, broad audits, independent verification, mixed workers, durable resume, or when Graphify can reveal real code dependencies. Also use when asked to set up, install, or configure graph engineering on a machine or repository. Do not require graph ceremony for small, sequential, or one-off tasks."
+description: "Choose and execute the simplest evidence-gated software workflow: a linear agent loop by default, native transient fan-out for proven independent lanes, or the durable graph runtime for repeated, long-running, high-value, resumable, or effectful work. Use when facing substantial multi-file work, parallel agents, workflow orchestration, migrations, broad audits, independent verification, mixed workers, durable resume, or when Graphify can reveal real code dependencies. Also use when asked to set up, install, or configure graph engineering on a machine or repository. Do not require graph ceremony for small, sequential, or one-off tasks."
 ---
 
 # Graph Engineering
