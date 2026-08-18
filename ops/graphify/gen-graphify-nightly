@@ -218,8 +218,14 @@ def refresh_stale_owned_mirrors(covered: set[str], started: float) -> list[str]:
         if free_gb(MIRRORS) < MIN_FREE_GB:
             log(f"owned-refresh: STOP, only {free_gb(MIRRORS):.1f}G free")
             break
-        rc, out = sh(["git", "-C", str(mirror_repo), "fetch", "origin", "--quiet"],
-                     timeout=120)
+        # Mirror clones have no interactive credential source; authenticate the
+        # way every non-interactive tool on the box does — via gh's helper.
+        # (gen-backend-python/limitless-fe failed with "could not read Username"
+        # on the first live run, 2026-08-18.)
+        git_auth = ["-c", "credential.helper=", "-c",
+                    "credential.helper=!gh auth git-credential"]
+        rc, out = sh(["git", "-C", str(mirror_repo), *git_auth,
+                      "fetch", "origin", "--quiet"], timeout=120)
         if rc == 0:
             rc, _head = sh(["git", "-C", str(mirror_repo), "rev-parse",
                             "--abbrev-ref", "origin/HEAD"], timeout=15)
