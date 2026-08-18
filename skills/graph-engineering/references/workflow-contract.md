@@ -4,6 +4,10 @@ Use this contract when handing a graph to a scheduler. The CLI accepts JSON only
 runner cannot enforce; never describe retries, isolation, schemas, or approvals as guarantees when
 they are only prose.
 
+This is the normalized durable IR, not the default authoring path. A direct loop is the default;
+transient host fan-out does not need this contract. Graphify maps dependencies but does not replace
+the scheduler when durable readiness, checkpoints, or resume are actually required.
+
 This minimal read-only diamond is directly valid workflow JSON:
 
 ```json
@@ -78,6 +82,35 @@ the tagged public `examples/repair-route.workflow.json`; do not shorten or reint
 - Parallel write scopes do not overlap unless isolated and followed by an integration node.
 - External, destructive, merge, deploy, or messaging nodes require explicit authority outside the
   workflow; a model-created approval token is invalid.
+
+## Deterministic control nodes
+
+The portable runtime has a closed operation registry: `schema_validate`, `select`, `map`,
+`stable_union`, `dedupe`, `sort`, `typed_predicate`, `risk_router`, and `verdict_reducer`. Use these
+for fan-in and routing rather than asking a model to perform deterministic mechanics. `route`
+predicates create persisted selected/skipped decisions. `loop` is an explicit bounded control edge
+to a static ancestor, not a cycle in the artifact dependency graph; loop regions must be
+replay-safe/effect-free, checkpoint each iteration, and stop at the declared ceiling.
+
+## RolePolicy and risk contract
+
+A policy-bound workflow references the exact version, generation, and digest of the independently
+reviewed `.graph-engineering/role-policy.json`. Every agent's `authority` must exactly describe its
+profile, capabilities, tools, write scopes, effects, deployment targets, approvals, and token/cost
+ceiling. Runtime authorization permits subsets only.
+
+Every policy-bound agent declares a risk topology:
+
+- low: deterministic checks and no model verifier;
+- medium: exactly one required verifier with distinct profile, lineage, and context;
+- high: at least two required verifier nodes with distinct lenses plus a required named-human
+  approval that depends on them all.
+
+The producer's verification contract names `raw_evidence_outputs`; verifier inputs must bind those
+exact producer artifacts, not an unrelated decoy or narrative output. Each verifier exposes a
+`verdict` artifact whose JSON Schema requires the literal `verdict: pass`, so a reviewer's presence
+cannot be mistaken for acceptance. Complete provider usage is persisted in execution receipts;
+missing usage or values exceeding the authority ceiling fail the node.
 
 ## Stable failure result
 
@@ -178,43 +211,3 @@ The runtime supplies `integration_failure` as a fixed typed artifact with `code`
 `failure_digest`. It invalidates only declared targets, preserves unrelated producer artifacts,
 and rebuilds integration. Unknown checks, ambiguous routes, non-check failures, exhausted budgets,
 and repeated identical failure digests stop without an inferred target.
-
-## Typed profile fallback
-
-A read-only, replay-safe agent may name up to four ordered fallback profiles. Each route is used at
-most once and runs only after the immediately preceding profile returns one of its exact typed
-adapter failure codes:
-
-```json
-"fallback": {
-  "routes": [{
-    "id": "backup_provider",
-    "profile": "backup-research",
-    "on_codes": ["SPAWN_FAILED", "TIMEOUT", "OUTPUT_LIMIT"],
-    "max_uses": 1
-  }]
-}
-```
-
-No wildcard failure code or model-selected profile exists. Every candidate gets a fresh isolated
-worktree, and a successful fallback still must pass the node's deterministic checks before its
-artifact releases an edge. Automatic fallback is rejected for writing, external, destructive, or
-non-idempotent nodes; route those failures to an explicit human or new run instead. See
-`examples/profile-fallback.workflow.json`.
-
-## Evaluator-repair topology
-
-Use an acyclic, bounded `produce -> evaluate -> repair` topology when fresh-context critique adds
-value. The evaluator returns typed defects but never decides acceptance. The repair node consumes
-both candidate and critique, and deterministic project tests gate the final artifact. See
-`examples/evaluator-repair.workflow.json`. For code-writing repair driven by a combined integration
-failure, use `examples/repair-route.workflow.json`; its exact check-to-writer route is authoritative.
-
-## Controlled workflow compilation
-
-Treat model-created workflow JSON as untrusted input. `graph-engineer compile` binds a validated
-candidate to the current assessment source, repository identity, and frozen product-contract
-generation in an inert `workflow-proposal/v1` envelope. It does not create a runnable workflow.
-`graph-engineer accept` requires the exact proposal digest, the frozen contract's named human
-approver, and a distinct proposer; it revalidates all bindings before writing a new workflow plus
-acceptance receipt. Never run the raw candidate or use a model identity as the approver.

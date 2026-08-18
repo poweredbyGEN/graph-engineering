@@ -44,7 +44,23 @@ For Kimi or GLM through OpenCode, install the tagged
 use the matching subprocess profile. The permission file is not an OS sandbox; the runtime's
 worktree, reduced environment, write scope, and changeset validation are the security boundary.
 
-## 3. Create a workflow
+## 3. Choose before creating a workflow
+
+```bash
+graph-engineer choose --brief task-brief.json --repo "$PWD" --focus-path src --json
+```
+
+The default is `LINEAR`. Use `TRANSIENT_GRAPH` only with at least two independent lanes, explicit
+linear/graph cost estimates, and at least 10% forecast latency gain. Use `DURABLE_GRAPH` only when
+the earned graph is long-running, resumable, effectful, or has passed the exact-digest promotion
+gate. Graphify is bounded dependency evidence for explicit tracked fresh focus paths; it is not a
+scheduler, and node count is never an eligibility signal.
+
+For LINEAR and TRANSIENT_GRAPH, `graph-engineer execute --brief ...` returns a host dispatch
+contract without requiring a project capsule. The host owns transient agents. Continue below only
+for durable work.
+
+## 4. Create a durable workflow
 
 Store reviewed workflows under `.graph-engineering/workflows/<name>.json`. The CLI accepts JSON,
 not YAML. Start from the read-only example in
@@ -62,11 +78,24 @@ For each node declare:
 - an explicit effect classification before any automatic retry or repair;
 - `required` behavior and the downstream artifact consumers.
 
+Prefer the closed deterministic operation registry for data movement and decisions:
+`schema_validate`, `select`, `map`, `stable_union`, `dedupe`, `sort`, `typed_predicate`,
+`risk_router`, and `verdict_reducer`. Typed routes persist their decision. A bounded loop may target
+only a static ancestor region; every looped node must be replay-safe/effect-free and every
+iteration is checkpointed under the shared attempt budget.
+
+When the workflow binds `.graph-engineering/role-policy.json`, every agent declares exact narrowed
+authority and risk verification. Low risk uses deterministic checks only. Medium uses one distinct
+profile/lineage/context verifier consuming an explicitly classified producer raw-evidence output.
+High uses two distinct lenses and a required named-human approval. A required verifier's typed
+verdict schema must accept only `verdict: pass`. Provider-reported tokens/cost are stored in
+receipts and checked against the node's reviewed ceiling; missing usage fails closed.
+
 Use an integration node for changesets. It alone combines accepted writer artifacts and runs the
 complete project gate. An integration repair route maps exact failing check IDs to exact producer
 and input names; it is not permission to retry the graph.
 
-## 4. Start the workflow
+## 5. Start the workflow
 
 Run the deterministic preflight before spending model tokens:
 
@@ -87,7 +116,7 @@ preflights capabilities, creates durable state, and launches only ready nodes.
 Do not start a second live run with the same objective/worktree scope. Inspect the existing run
 first and resume it when appropriate.
 
-## 5. Inspect, resume, and integrate
+## 6. Inspect, resume, and integrate
 
 The run output prints its state database. The default is
 `~/.local/state/graph-engineering/runs/<run-id>/state.db`; artifacts and receipts live beside it.
@@ -131,11 +160,10 @@ state/artifacts, and authorization. Handoff verifies those facts; it does not co
 authority. Use `status --projection` for bounded JSON that a Herdr adapter or terminal can render;
 the runtime does not mutate Herdr or require a visual builder.
 
-Before adopting graph engineering in an existing repository, run
-`graph-engineer assess --repo "$PWD" --json`. It writes nothing and returns prioritized evidence
-gaps. Add `--output assessment.json` only when a reviewed init flow will consume the stable
-`graph-engineering/assessment/v1` artifact. The consumer must reject it after its bound HEAD or
-tracked/untracked source digest changes; an old advisory assessment is not current project evidence.
+`graph-engineer assess --repo "$PWD" --json` is advisory repository evidence, not task selection
+and not a readiness score. Add `--output assessment.json` only when a reviewed durable init flow
+will consume the stable artifact. The consumer must reject it after its bound HEAD or source digest
+changes.
 
 Terse host requests all mean the same enforced path:
 
@@ -147,7 +175,18 @@ If the portable CLI is unavailable, the host may use native subagents only after
 durable leases, fencing, schema-bound handoff, localized repair, and verified resume are procedural
 rather than mechanically enforced. Native fallback is not silently equivalent.
 
-## 6. Register the graph task MCP service
+## 7. Record economics and promote only proven templates
+
+Use `graph-engineer outcome` to record measured tokens, cost, model, verifier overturns, cold
+adoption time, integration failures, escaped defects, declared guard metrics, failure class, and
+live-proof time. The contract (`outcome/v2`) rejects `accepted: true` while any guard metric is
+regressed, and promotion rejects matched pairs with regressions — record a gamed objective as a
+failed outcome, never a win. Use
+`graph-engineer promote` only on matched LINEAR/TRANSIENT_GRAPH runs with the same acceptance
+suite. Promotion needs at least three accepted wins on one declared objective, no escaped-defect
+regression, reported cost, and a named review bound to the exact evidence digest.
+
+## 8. Register the graph task MCP service
 
 The CLI runtime does not require MCP. Register the MCP service when interactive agents need durable
 cross-client task claiming or polling:
@@ -168,7 +207,7 @@ Verify with `claude mcp get graph-task`, `codex mcp get graph-task`, and
 domain. Legacy clients negotiate their supported handshake version; capable clients can use the
 stateless `2026-07-28` lifecycle and optional Tasks extension.
 
-## 7. Add an A2A remote worker only when needed
+## 9. Add an A2A remote worker only when needed
 
 Use `adapter = "a2a"` in the private user configuration when a node must be delegated to an
 independently operated agent. Configure its private Agent Card URL, Bearer token environment
@@ -179,7 +218,7 @@ The current adapter supports the A2A 1.x HTTP+JSON polling path. It pins the car
 and remote code changes still pass through a local worktree and deterministic checks. Read the
 repository's `docs/A2A.md` for the exact subset and residual idempotency risk.
 
-## 8. Troubleshoot without bypassing gates
+## 10. Troubleshoot without bypassing gates
 
 - `doctor` fails: fix config mode, missing executable/environment reference, or disk-backed
   `TMPDIR`; do not weaken the probe.
