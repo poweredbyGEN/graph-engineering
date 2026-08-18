@@ -8,6 +8,9 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- CI approves the repo operator's exact public squash-merge identity at the sanctioned
+  `--allowed-commit-name` boundary, so default-branch pushes can reach a green verdict again.
+
 - Outcome contract v2 with declared guard metrics: an accepted outcome cannot carry a regressed
   countermetric (Goodhart guard), promotion rejects matched pairs with regressed guard metrics,
   and summaries count guard-metric regressions. Legacy v1 outcome records remain verifiable.
