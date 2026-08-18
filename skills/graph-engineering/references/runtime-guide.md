@@ -178,7 +178,10 @@ rather than mechanically enforced. Native fallback is not silently equivalent.
 ## 7. Record economics and promote only proven templates
 
 Use `graph-engineer outcome` to record measured tokens, cost, model, verifier overturns, cold
-adoption time, integration failures, escaped defects, failure class, and live-proof time. Use
+adoption time, integration failures, escaped defects, declared guard metrics, failure class, and
+live-proof time. The contract (`outcome/v2`) rejects `accepted: true` while any guard metric is
+regressed, and promotion rejects matched pairs with regressions — record a gamed objective as a
+failed outcome, never a win. Use
 `graph-engineer promote` only on matched LINEAR/TRANSIENT_GRAPH runs with the same acceptance
 suite. Promotion needs at least three accepted wins on one declared objective, no escaped-defect
 regression, reported cost, and a named review bound to the exact evidence digest.
