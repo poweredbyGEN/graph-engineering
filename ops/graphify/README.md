@@ -85,6 +85,10 @@ would have disabled a real safety check to fix a misfire.
 ```bash
 install -m 755 gen-graphify-nightly /usr/local/sbin/
 install -m 644 gen-graphify-nightly.{service,timer} /etc/systemd/system/
+# site drop-in: point the installed script at this checkout's ops/ for site_config
+mkdir -p /etc/systemd/system/gen-graphify-nightly.service.d
+printf '[Service]\nEnvironment=AGENT_INFRA_OPS=%s\n' "$(pwd)/.." \
+  > /etc/systemd/system/gen-graphify-nightly.service.d/site.conf
 systemctl daemon-reload
 systemctl enable --now gen-graphify-nightly.timer
 ```

@@ -165,7 +165,7 @@ cd harness/servers/verify-mcp && uv run pytest -q    # 16
 cd ../../../loops && python3 -m pytest tests/ -q     # 23
 cd ../swarm && python3 -m pytest tests/ -q           # 21
 cd ../traces && GRAPH_ENGINEERING_PORTABLE_TESTS=1 python3 -m pytest tests/ -q  # 27
-cd ../ops    && python3 -m pytest tests/ -q          # 14
+cd ../ops    && python3 -m pytest tests/ -q          # 22
 ```
 
 101 portable tests, no network, no API keys. Hosts with the installed Graphify reconciler and
