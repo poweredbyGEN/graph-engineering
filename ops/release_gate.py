@@ -209,6 +209,10 @@ def _candidate_metadata_command(candidate_base: str | None) -> tuple[str, ...]:
         ".",
         "--mode",
         "candidate-metadata",
+        # intent: squash merges are authored by the repo operator's public
+        # GitHub identity; approve that exact identity at the CLI boundary.
+        "--allowed-commit-name",
+        "Mav",
     )
     if candidate_base is not None:
         return (*command, "--candidate-base", candidate_base)

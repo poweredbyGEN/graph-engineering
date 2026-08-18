@@ -18,6 +18,8 @@ steps:
           git fetch --force --tags --filter=blob:limit=16777217 origin '+refs/heads/*:refs/remotes/origin/*';
         fi
       - uv run python -m graph_engineering.public_safety --repo . --mode history
-      - uv run python -m graph_engineering.public_safety --repo . --mode candidate-metadata
+      # intent: squash merges are authored by the repo operator's public GitHub
+      # identity; approve that exact identity at the CLI boundary per policy.
+      - uv run python -m graph_engineering.public_safety --repo . --mode candidate-metadata --allowed-commit-name Mav
 
 concurrency: 1
