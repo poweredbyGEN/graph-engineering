@@ -7,7 +7,6 @@ import pytest
 import yaml
 
 from graph_engineering.public_safety import (
-    DEFAULT_MAX_ITEM_BYTES,
     ScanError,
     _commit_metadata_rules,
     load_extra_rules,
@@ -377,18 +376,29 @@ def test_candidate_metadata_rejects_controls_and_oversized_fields() -> None:
 
 
 @pytest.mark.parametrize("pipeline_name", ["packaging.yml", "public-safety.yml"])
-def test_history_scan_pipelines_hydrate_woodpecker_partial_clone(
+def test_history_scan_pipelines_request_authenticated_full_clone(
     pipeline_name: str,
 ) -> None:
     pipeline = yaml.safe_load(
         (Path(__file__).parents[1] / ".woodpecker" / pipeline_name).read_text()
     )
-    commands = pipeline["steps"][next(iter(pipeline["steps"]))]["commands"]
-    hydrate = next(
-        command for command in commands if "git fetch --unshallow" in command
-    )
-    blob_limit = DEFAULT_MAX_ITEM_BYTES + 1
+    clone = pipeline["clone"][0]
+    step = pipeline["steps"][next(iter(pipeline["steps"]))]
 
-    # intent: Woodpecker's --filter=tree:0 clone must not turn rev-list into
-    # hundreds of lazy network fetches that exceed the scanner's 120s bound.
-    assert hydrate.count(f"--filter=blob:limit={blob_limit} origin ") == 2
+    # intent: the trusted clone plugin owns private-forge credentials; later
+    # history fetches use a read-only repository credential supplied by CI.
+    assert clone["image"] == "woodpeckerci/plugin-git"
+    assert clone["settings"] == {"partial": False, "depth": 0, "tags": True}
+    assert step["environment"]["GITEA_READ_TOKEN"] == {
+        "from_secret": "gitea_read_token"
+    }
+    assert step["environment"]["GIT_CONFIG_COUNT"] == "2"
+    assert step["environment"]["GIT_CONFIG_KEY_0"] == "credential.helper"
+    assert step["environment"]["GIT_CONFIG_VALUE_0"] == ""
+    assert step["environment"]["GIT_CONFIG_KEY_1"] == "credential.helper"
+    assert "graph-engineering-ci" in step["environment"]["GIT_CONFIG_VALUE_1"]
+    if pipeline_name == "public-safety.yml":
+        assert any(
+            "refs/heads/*:refs/remotes/origin/*" in command
+            for command in step["commands"]
+        )

@@ -22,6 +22,7 @@ module-level import binds the real functions, and the fixtures are real dirs.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import pathlib
 import subprocess
@@ -80,14 +81,15 @@ def env(tmp_path, monkeypatch):
 
 def test_missing_checkout_graph_gets_symlink(env):
     projects, mirrors, monkeypatch = env
-    _git_repo(projects / "day", "https://github.com/dayprotocol/day.git")
+    _git_repo(projects / "day", "https://forge.example/dayprotocol/day.git")
     mirror_out = _mirror_graph(mirrors, "dayprotocol/day")
     mod = _load(monkeypatch, projects, mirrors)
     mod.RECONCILER_REMOTES = {"dayprotocol/day"}
 
-    covered = mod.ensure_reconciler_exposure(mod.remote_map())
+    covered, failed = mod.ensure_reconciler_exposure(mod.remote_map())
 
     assert covered == {"dayprotocol/day"}
+    assert failed == []
     link = projects / "day" / "graphify-out"
     assert link.is_symlink()
     assert link.resolve() == mirror_out.resolve()
@@ -95,9 +97,19 @@ def test_missing_checkout_graph_gets_symlink(env):
     assert (link / "graph.json").exists()
 
 
+def test_github_remote_is_not_discovered(env):
+    # intent: GitHub is removed from graph synchronization; accepting this checkout
+    # silently restores the retired mirror as an agent-trusted source.
+    projects, mirrors, monkeypatch = env
+    _git_repo(projects / "legacy", "https://github.com/acme/widget.git")
+    mod = _load(monkeypatch, projects, mirrors)
+
+    assert mod.remote_map() == {}
+
+
 def test_wrong_symlink_is_repointed(env):
     projects, mirrors, monkeypatch = env
-    _git_repo(projects / "day", "https://github.com/dayprotocol/day.git")
+    _git_repo(projects / "day", "https://forge.example/dayprotocol/day.git")
     mirror_out = _mirror_graph(mirrors, "dayprotocol/day")
     elsewhere = mirrors / "elsewhere"
     elsewhere.mkdir()
@@ -112,7 +124,7 @@ def test_wrong_symlink_is_repointed(env):
 
 def test_stale_real_dir_is_moved_aside_never_deleted(env):
     projects, mirrors, monkeypatch = env
-    _git_repo(projects / "day", "https://github.com/dayprotocol/day.git")
+    _git_repo(projects / "day", "https://forge.example/dayprotocol/day.git")
     now = time.time()
     _mirror_graph(mirrors, "dayprotocol/day", mtime=now)
     stale = projects / "day" / "graphify-out"
@@ -134,7 +146,7 @@ def test_stale_real_dir_is_moved_aside_never_deleted(env):
 
 def test_newer_local_graph_is_left_alone(env):
     projects, mirrors, monkeypatch = env
-    _git_repo(projects / "day", "https://github.com/dayprotocol/day.git")
+    _git_repo(projects / "day", "https://forge.example/dayprotocol/day.git")
     now = time.time()
     _mirror_graph(mirrors, "dayprotocol/day", mtime=now - 8 * 86400)
     local = projects / "day" / "graphify-out"
@@ -154,7 +166,7 @@ def test_owned_slug_without_mirror_graph_is_uncovered_and_discoverable(env):
     The guard must report it uncovered so discover() builds it like any repo."""
     projects, mirrors, monkeypatch = env
     repo = projects / "day"
-    _git_repo(repo, "https://github.com/dayprotocol/day.git")
+    _git_repo(repo, "https://forge.example/dayprotocol/day.git")
     (repo / "f.txt").write_text("x", encoding="utf-8")
     subprocess.run(["git", "-C", str(repo), "add", "f.txt"], check=True)
     subprocess.run(
@@ -167,8 +179,9 @@ def test_owned_slug_without_mirror_graph_is_uncovered_and_discoverable(env):
     mod.MIN_COMMITS_30D = 1
 
     remotes = mod.remote_map()
-    covered = mod.ensure_reconciler_exposure(remotes)
+    covered, failed = mod.ensure_reconciler_exposure(remotes)
     assert covered == set(), "no mirror graph -> NOT covered"
+    assert failed == []
 
     repos = mod.discover(remotes, covered)
     assert [r[0] for r in repos] == ["dayprotocol/day"], (
@@ -179,7 +192,7 @@ def test_owned_slug_without_mirror_graph_is_uncovered_and_discoverable(env):
 def test_actually_covered_slug_is_skipped_by_discover(env):
     projects, mirrors, monkeypatch = env
     repo = projects / "day"
-    _git_repo(repo, "https://github.com/dayprotocol/day.git")
+    _git_repo(repo, "https://forge.example/dayprotocol/day.git")
     (repo / "f.txt").write_text("x", encoding="utf-8")
     subprocess.run(["git", "-C", str(repo), "add", "f.txt"], check=True)
     subprocess.run(
@@ -193,8 +206,9 @@ def test_actually_covered_slug_is_skipped_by_discover(env):
     mod.MIN_COMMITS_30D = 1
 
     remotes = mod.remote_map()
-    covered = mod.ensure_reconciler_exposure(remotes)
+    covered, failed = mod.ensure_reconciler_exposure(remotes)
     assert covered == {"dayprotocol/day"}
+    assert failed == []
     assert mod.discover(remotes, covered) == [], (
         "a slug the reconciler actually covers must not be rebuilt by the nightly"
     )
@@ -206,6 +220,7 @@ def test_stale_owned_mirror_is_rebuilt_nightly(env):
     MAX_GRAPH_AGE_HOURS must be rebuilt by the nightly (freshness floor)."""
     projects, mirrors, monkeypatch = env
     now = time.time()
+    _git_repo(projects / "day", "https://forge.example/dayprotocol/day.git")
     mirror_repo = mirrors / "dayprotocol__day"
     _git_repo(mirror_repo, "https://github.com/dayprotocol/day.git")
     out = mirror_repo / "graphify-out"
@@ -216,15 +231,31 @@ def test_stale_owned_mirror_is_rebuilt_nightly(env):
     mod.RECONCILER_REMOTES = {"dayprotocol/day"}
 
     calls = []
+    shell_calls = []
     monkeypatch.setattr(mod, "build", lambda path: (calls.append(path), (True, "ok"))[1])
-    monkeypatch.setattr(mod, "sh", lambda *a, **k: (0, "origin/main\n"))
+
+    def successful_git(args, **_kwargs):
+        shell_calls.append(args)
+        if args[-3:] == ["remote", "get-url", "origin"]:
+            return 0, "https://forge.example/dayprotocol/day.git\n"
+        return 0, ""
+
+    monkeypatch.setattr(mod, "sh", successful_git)
     # the real box may sit under MIN_FREE_GB; the disk floor has its own guard
     monkeypatch.setattr(mod, "free_gb", lambda _p: 999.0)
 
-    rebuilt = mod.refresh_stale_owned_mirrors({"dayprotocol/day"}, time.monotonic())
+    rebuilt, failed, deferred = mod.refresh_stale_owned_mirrors(
+        {"dayprotocol/day"}, {"dayprotocol/day": [projects / "day"]}, time.monotonic()
+    )
 
     assert rebuilt == ["dayprotocol/day"]
+    assert failed == []
+    assert deferred == []
     assert calls == [mirror_repo], "the MIRROR clone is the single build location"
+    assert [
+        "git", "-C", str(mirror_repo), "fetch",
+        "https://forge.example/dayprotocol/day.git", "--quiet",
+    ] in shell_calls
 
 
 def test_fresh_owned_mirror_is_not_rebuilt(env):
@@ -239,4 +270,114 @@ def test_fresh_owned_mirror_is_not_rebuilt(env):
     monkeypatch.setattr(mod, "build", lambda path: (_ for _ in ()).throw(
         AssertionError("a fresh mirror must not be rebuilt")))
 
-    assert mod.refresh_stale_owned_mirrors({"dayprotocol/day"}, time.monotonic()) == []
+    assert mod.refresh_stale_owned_mirrors(
+        {"dayprotocol/day"}, {"dayprotocol/day": [projects / "day"]}, time.monotonic()
+    ) == ([], [], [])
+
+
+def test_exposure_failure_is_not_counted_as_covered(env):
+    projects, mirrors, monkeypatch = env
+    _git_repo(projects / "widget", "https://forge.example/acme/widget.git")
+    _mirror_graph(mirrors, "acme/widget")
+    (projects / "widget" / "graphify-out").write_text("collision", encoding="utf-8")
+    mod = _load(monkeypatch, projects, mirrors)
+    mod.RECONCILER_REMOTES = {"acme/widget"}
+
+    covered, failed = mod.ensure_reconciler_exposure(mod.remote_map())
+
+    assert covered == set()
+    assert failed == ["acme/widget"]
+
+
+def test_changed_origin_is_rejected_at_fetch_boundary(env):
+    projects, mirrors, monkeypatch = env
+    now = time.time()
+    checkout = projects / "widget"
+    _git_repo(checkout, "https://forge.example/acme/widget.git")
+    mirror_repo = mirrors / "acme__widget"
+    _git_repo(mirror_repo, "https://forge.example/acme/widget.git")
+    out = mirror_repo / "graphify-out"
+    out.mkdir()
+    graph = out / "graph.json"
+    graph.write_text('{"nodes": []}', encoding="utf-8")
+    os.utime(graph, (now - 3 * 86400, now - 3 * 86400))
+    mod = _load(monkeypatch, projects, mirrors)
+    mod.RECONCILER_REMOTES = {"acme/widget"}
+    calls = []
+
+    def changed_remote(args, **_kwargs):
+        calls.append(args)
+        if args[-3:] == ["remote", "get-url", "origin"]:
+            return 0, "https://github.com/acme/widget.git\n"
+        raise AssertionError("an untrusted origin must not reach git fetch")
+
+    monkeypatch.setattr(mod, "sh", changed_remote)
+    monkeypatch.setattr(mod, "free_gb", lambda _p: 999.0)
+
+    rebuilt, failed, deferred = mod.refresh_stale_owned_mirrors(
+        {"acme/widget"}, {"acme/widget": [checkout]}, time.monotonic()
+    )
+
+    assert rebuilt == []
+    assert failed == ["acme/widget"]
+    assert deferred == []
+    assert all("fetch" not in call for call in calls)
+
+
+def test_owned_refresh_failure_makes_the_sweep_fail(env):
+    # intent: an owned mirror failure must appear in state and the unit exit code;
+    # systemd success cannot discard every failed owned refresh.
+    projects, mirrors, monkeypatch = env
+    mod = _load(monkeypatch, projects, mirrors)
+    monkeypatch.setattr(mod, "free_gb", lambda _p: 999.0)
+    monkeypatch.setattr(mod, "remote_map", dict)
+    monkeypatch.setattr(
+        mod, "ensure_reconciler_exposure", lambda _r: ({"acme/widget"}, [])
+    )
+    monkeypatch.setattr(
+        mod,
+        "refresh_stale_owned_mirrors",
+        lambda *_a: ([], ["acme/widget"], []),
+    )
+    monkeypatch.setattr(mod, "discover", lambda *_a: [])
+
+    assert mod.main() == 1
+    state = json.loads((projects / "nightly.json").read_text(encoding="utf-8"))
+    assert state["failed"] == ["acme/widget"]
+
+
+def test_owned_deferral_makes_the_sweep_fail(env):
+    projects, mirrors, monkeypatch = env
+    mod = _load(monkeypatch, projects, mirrors)
+    monkeypatch.setattr(mod, "free_gb", lambda _p: 999.0)
+    monkeypatch.setattr(mod, "remote_map", dict)
+    monkeypatch.setattr(
+        mod, "ensure_reconciler_exposure", lambda _r: ({"acme/widget"}, [])
+    )
+    monkeypatch.setattr(
+        mod,
+        "refresh_stale_owned_mirrors",
+        lambda *_a: ([], [], ["acme/widget"]),
+    )
+    monkeypatch.setattr(mod, "discover", lambda *_a: [])
+
+    assert mod.main() == 1
+    state = json.loads((projects / "nightly.json").read_text(encoding="utf-8"))
+    assert state["budget_stopped"] == ["acme/widget"]
+
+
+def test_discovered_repo_deferral_makes_the_sweep_fail(env):
+    projects, mirrors, monkeypatch = env
+    mod = _load(monkeypatch, projects, mirrors)
+    monkeypatch.setattr(mod, "free_gb", lambda _p: 999.0)
+    monkeypatch.setattr(mod, "remote_map", dict)
+    monkeypatch.setattr(mod, "ensure_reconciler_exposure", lambda _r: (set(), []))
+    monkeypatch.setattr(mod, "refresh_stale_owned_mirrors", lambda *_a: ([], [], []))
+    monkeypatch.setattr(
+        mod, "discover", lambda *_a: [("acme/widget", projects / "widget", 1)]
+    )
+    mod.SWEEP_BUDGET = -1
+
+    assert mod.main() == 1
+    state = json.loads((projects / "nightly.json").read_text(encoding="utf-8"))
+    assert state["budget_stopped"] == ["acme/widget"]

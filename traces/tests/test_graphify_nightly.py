@@ -23,13 +23,18 @@ from pathlib import Path
 
 import pytest
 
-SWEEP = Path("/usr/local/sbin/gen-graphify-nightly")
+SWEEP = Path(os.environ.get(
+    "GEN_GRAPHIFY_NIGHTLY_SCRIPT", "/usr/local/sbin/gen-graphify-nightly"
+))
 
 if os.environ.get("GRAPH_ENGINEERING_PORTABLE_TESTS") == "1" or not SWEEP.exists():
     pytest.skip("site-installed nightly sweep not available in portable suite", allow_module_level=True)
 
 
 def _load():
+    candidate_ops = SWEEP.parents[1]
+    if (candidate_ops / "site_config.py").exists():
+        sys.path.insert(0, str(candidate_ops))
     spec = importlib.util.spec_from_loader(
         "gen_graphify_nightly",
         importlib.machinery.SourceFileLoader("gen_graphify_nightly", str(SWEEP)),
@@ -44,29 +49,35 @@ M = _load()
 M.LOG = Path(tempfile.gettempdir()) / "graph-engineering-nightly-test.log"
 
 
+def _discover():
+    return M.discover(M.remote_map(), set(M.RECONCILER_REMOTES))
+
+
 # --- remote normalisation: the identity used for dedup --------------------------------
 
-def test_two_checkouts_of_one_repo_normalise_to_the_same_slug():
-    # intent: a repo cloned twice under different folder names is ONE GitHub repo. Keying
+def test_two_checkouts_of_one_repo_normalise_to_the_same_slug(monkeypatch):
+    # intent: a repo cloned twice under different folder names is ONE forge repo. Keying
     # on directory instead of remote would build the same graph twice and let two builds
     # race on one graphify-out.
-    a = M.normalize_remote("https://github.com/acme/widget-service.git")
-    b = M.normalize_remote("git@github.com:acme/widget-service.git")
+    monkeypatch.setattr(M, "CANONICAL_FORGE_HOSTS", {"forge.example"})
+    a = M.normalize_remote("https://forge.example/acme/widget-service.git")
+    b = M.normalize_remote("git@forge.example:acme/widget-service.git")
     assert a == b == "acme/widget-service"
 
 
-def test_ssh_https_and_bare_forms_all_normalise():
-    for url in ("https://github.com/acme/widget.git",
-                "git@github.com:acme/widget.git",
-                "ssh://git@github.com/acme/widget.git",
-                "https://github.com/acme/widget"):
+def test_ssh_https_and_bare_forms_all_normalise(monkeypatch):
+    monkeypatch.setattr(M, "CANONICAL_FORGE_HOSTS", {"forge.example"})
+    for url in ("https://forge.example/acme/widget.git",
+                "git@forge.example:acme/widget.git",
+                "ssh://git@forge.example/acme/widget.git",
+                "https://forge.example/acme/widget"):
         assert M.normalize_remote(url) == "acme/widget"
 
 
-def test_a_non_github_remote_is_ignored_rather_than_guessed():
-    # intent: a local path or unknown host has no stable slug. Inventing one would let two
-    # unrelated repos collide onto one identity.
-    for url in ("/local/path", "", "https://gitlab.com/x/y.git", "   "):
+def test_github_and_local_remotes_are_not_sync_sources():
+    # intent: GitHub is outside the canonical synchronization path. Accepting it lets a
+    # removed mirror silently become the graph source again.
+    for url in ("/local/path", "", "https://github.com/x/y.git", "   "):
         assert M.normalize_remote(url) is None
 
 
@@ -80,7 +91,7 @@ def test_externally_managed_repos_are_excluded_from_the_sweep(monkeypatch):
     # Asserts the INVARIANT against whatever this site has configured, not against specific
     # repo names. Pinning real org/repo strings made this suite pass only on the machine it
     # was written on -- and leaked an org's repo inventory into a shared repo.
-    enrolled = {slug for slug, _, _ in M.discover()}
+    enrolled = {slug for slug, _, _ in _discover()}
     assert not (enrolled & M.RECONCILER_REMOTES), (
         "a repo marked externally-managed was enrolled anyway")
 
@@ -89,25 +100,25 @@ def test_an_externally_managed_repo_is_never_enrolled(monkeypatch):
     # intent: the mirror, proved rather than assumed. Take a repo discovery ACTUALLY found,
     # mark it externally managed, and confirm it disappears. Without this, the test above
     # passes vacuously whenever the configured list is empty -- which is the default.
-    found = M.discover()
+    found = _discover()
     if not found:
         pytest.skip("no active repos discovered on this machine")
     victim = found[0][0]
     monkeypatch.setattr(M, "RECONCILER_REMOTES", {victim})
-    assert victim not in {slug for slug, _, _ in M.discover()}
+    assert victim not in {slug for slug, _, _ in _discover()}
 
 
 def test_discovery_dedupes_so_each_remote_appears_once():
     # intent: a duplicate entry means the same graph is built twice in one sweep, wasting
     # a slow capped build and racing on the output path.
-    slugs = [slug for slug, _, _ in M.discover()]
+    slugs = [slug for slug, _, _ in _discover()]
     assert len(slugs) == len(set(slugs))
 
 
 def test_discovery_returns_existing_real_checkouts_only():
     # intent: a worktree's .git is a FILE, not a directory. Graphing a worktree duplicates
     # its parent's graph against a different path.
-    for _, path, _ in M.discover():
+    for _, path, _ in _discover():
         assert (path / ".git").is_dir()
 
 
@@ -149,7 +160,7 @@ def test_inactive_repos_are_not_enrolled():
     # intent: a repo with no recent commits has a graph that is still TRUE. Rebuilding it
     # burns the budget that active repos need.
     assert M.MIN_COMMITS_30D >= 1
-    for _, path, commits in M.discover():
+    for _, path, commits in _discover():
         assert commits >= M.MIN_COMMITS_30D
 
 
