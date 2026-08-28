@@ -1,22 +1,31 @@
 when:
   - event: [push, pull_request]
 
+clone:
+  - name: git
+    image: woodpeckerci/plugin-git
+    settings:
+      partial: false
+      depth: 0
+      tags: true
+
 steps:
   public-safety:
     image: ghcr.io/astral-sh/uv:python3.13-bookworm
+    environment:
+      GITEA_READ_TOKEN:
+        from_secret: gitea_read_token
+      GIT_CONFIG_COUNT: "2"
+      GIT_CONFIG_KEY_0: credential.helper
+      GIT_CONFIG_VALUE_0: ""
+      GIT_CONFIG_KEY_1: credential.helper
+      GIT_CONFIG_VALUE_1: '!f() { echo username=graph-engineering-ci; echo password=$GITEA_READ_TOKEN; }; f'
     commands:
       - apt-get update && apt-get install -y --no-install-recommends git
       - uv sync --frozen --extra dev
       - uv run pytest -q tests/test_public_safety.py
       - uv run python -m graph_engineering.public_safety --repo . --mode tree
-      # intent: Woodpecker clones with --filter=tree:0. Hydrate every tree and
-      # every blob the scanner can accept before the bounded history scan.
-      - >-
-        if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
-          git fetch --unshallow --tags --filter=blob:limit=16777217 origin '+refs/heads/*:refs/remotes/origin/*';
-        else
-          git fetch --force --tags --filter=blob:limit=16777217 origin '+refs/heads/*:refs/remotes/origin/*';
-        fi
+      - git fetch --quiet --force --tags origin '+refs/heads/*:refs/remotes/origin/*'
       - uv run python -m graph_engineering.public_safety --repo . --mode history
       # intent: squash merges are authored by the repo operator's public GitHub
       # identity; approve that exact identity at the CLI boundary per policy.

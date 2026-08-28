@@ -165,10 +165,10 @@ cd harness/servers/verify-mcp && uv run pytest -q    # 16
 cd ../../../loops && python3 -m pytest tests/ -q     # 23
 cd ../swarm && python3 -m pytest tests/ -q           # 21
 cd ../traces && GRAPH_ENGINEERING_PORTABLE_TESTS=1 python3 -m pytest tests/ -q  # 27
-cd ../ops    && python3 -m pytest tests/ -q          # 22
+cd ../ops    && python3 -m pytest tests/ -q          # 28
 ```
 
-101 portable tests, no network, no API keys. Hosts with the installed Graphify reconciler and
+Portable tests use no network or API keys. Hosts with the installed Graphify reconciler and
 nightly sweep run another 26 site integration tests. If the portable tests pass, the machinery
 works — what remains is whether
 *your* checks are meaningful, which only `--check-only` on a repo you understand will tell you.

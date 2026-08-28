@@ -27,6 +27,7 @@ CONFIG_PATH = Path(os.environ.get("AGENT_INFRA_CONFIG", REPO_ROOT / "config.toml
 
 _DEFAULTS: dict = {
     "paths": {"projects": "~/projects", "scratch": "/tmp", "mirrors": ""},
+    "forge": {"canonical_hosts": []},
     "graph": {
         "externally_managed": [],
         "min_commits_30d": 5,

@@ -23,6 +23,12 @@ scratch = "/tmp"
 #   env: AGENT_INFRA_MIRRORS
 mirrors = ""
 
+[forge]
+# Optional allowlist for the canonical forge. When set, remotes on every other host are
+# excluded from graph discovery and refresh. GitHub is always excluded.
+#   env: AGENT_INFRA_CANONICAL_FORGE_HOSTS (comma-separated)
+canonical_hosts = []
+
 [graph]
 # Repos whose graphs are maintained by some OTHER process, so the nightly sweep skips them.
 # Two processes writing one graphify-out can corrupt a graph that agents then trust.

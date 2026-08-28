@@ -42,8 +42,8 @@ be added by hand, which never happens.
 A repo enrolls itself when it has ≥5 commits in the last 30 days and is not already owned
 by the reconciler. Three details that are easy to get wrong:
 
-- **Dedup by remote, not by path.** `aura-executor` and `aura-automation-service` are two
-  checkouts of one GitHub repo. Keying on directory builds the same graph twice and races
+- **Dedup by remote, not by path.** Two local names can be checkouts of one forge repo.
+  Keying on directory builds the same graph twice and races
   two writers onto one output.
 - **Skip worktrees.** A worktree's `.git` is a *file*, not a directory. Graphing one
   duplicates its parent against a different path.
@@ -60,8 +60,8 @@ by the reconciler. Three details that are easy to get wrong:
 | `MAX_GRAPH_AGE_HOURS` | 20 | Don't rebuild what is already fresh. |
 | `MAX_AUTO_FORCE_SHRINK` | 50 | See below. |
 
-A failed repo is logged but does **not** fail the unit — one bad repo must not mark the
-sweep red and hide that the other twenty succeeded.
+A failed repo is recorded in the state file and fails the unit after the sweep finishes.
+Successful repos still complete first, while systemd cannot report a partial sweep as green.
 
 ## The shrink-guard, and why `--force` is conditional
 

@@ -16,8 +16,8 @@ DESIGN NOTES
   - Discovery, not a hardcoded list. The reconciler's fixed 8-repo dict is exactly why
     those 26 repos were invisible. Any repo under PROJECTS with recent commits enrolls
     itself; no code change needed when a repo is created.
-  - Deduplicated by REMOTE, not by directory. aura-executor and aura-automation-service
-    are two checkouts of one GitHub repo -- keying on path would build the same graph
+  - Deduplicated by REMOTE, not by directory. Two local names can be checkouts of one
+    forge repo -- keying on path would build the same graph
     twice and race on the same output.
   - Skips repos the reconciler already owns, so the two never fight over one graph.
   - Sequential, never parallel. Rebuilds are CPU- and IO-heavy; the whole point of the
@@ -69,6 +69,9 @@ MAX_AUTO_FORCE_SHRINK = int(site_config.get("graph", "max_auto_force_shrink", "G
 # managed", which is correct for a fresh install and wrong for nobody.
 RECONCILER_REMOTES = set(site_config.get("graph", "externally_managed",
                                         "AGENT_INFRA_EXTERNALLY_MANAGED"))
+CANONICAL_FORGE_HOSTS = set(
+    site_config.get("forge", "canonical_hosts", "AGENT_INFRA_CANONICAL_FORGE_HOSTS")
+)
 
 
 def log(msg: str) -> None:
@@ -91,18 +94,24 @@ def sh(args: list[str], cwd: pathlib.Path | None = None, timeout: int = 60) -> t
 
 
 def normalize_remote(url: str) -> str | None:
-    """github.com/Org/Repo(.git) -> 'Org/Repo'. Identity for dedup, so two checkouts of
-    one repo collapse to a single entry instead of racing on the same graph."""
+    """Network forge URL -> 'Org/Repo'. Identity stays stable across forge moves."""
     url = url.strip()
     if not url:
         return None
-    for prefix in ("https://github.com/", "git@github.com:", "ssh://git@github.com/"):
-        if url.startswith(prefix):
-            slug = url[len(prefix):]
-            break
+    if url.startswith("git@") and ":" in url:
+        host, slug = url[4:].split(":", 1)
+    elif "://" in url:
+        remote = url.split("://", 1)[1]
+        host, _, slug = remote.partition("/")
     else:
         return None
-    return slug[:-4] if slug.endswith(".git") else slug
+    host = host.rsplit("@", 1)[-1].lower()
+    if host == "github.com" or (
+        CANONICAL_FORGE_HOSTS and host not in CANONICAL_FORGE_HOSTS
+    ):
+        return None
+    slug = slug.removesuffix(".git").strip("/")
+    return slug if "/" in slug else None
 
 
 def free_gb(path: pathlib.Path) -> float:
@@ -139,7 +148,9 @@ def mirror_out_dir(slug: str) -> pathlib.Path:
     return MIRRORS / slug.replace("/", "__") / "graphify-out"
 
 
-def ensure_reconciler_exposure(remotes: dict[str, list[pathlib.Path]]) -> set[str]:
+def ensure_reconciler_exposure(
+    remotes: dict[str, list[pathlib.Path]],
+) -> tuple[set[str], list[str]]:
     """externally_managed is a CLAIM, not a fact — verify it and return the slugs that
     are ACTUALLY covered by the reconciler (a mirror graph.json exists).
 
@@ -160,6 +171,7 @@ def ensure_reconciler_exposure(remotes: dict[str, list[pathlib.Path]]) -> set[st
     it like any other active repo instead of silently skipping it forever.
     """
     covered: set[str] = set()
+    failed: list[str] = []
     for slug in sorted(RECONCILER_REMOTES):
         mirror = mirror_out_dir(slug)
         mirror_graph = mirror / "graph.json"
@@ -167,7 +179,7 @@ def ensure_reconciler_exposure(remotes: dict[str, list[pathlib.Path]]) -> set[st
             log(f"exposure: {slug} is externally_managed but has NO mirror graph -- "
                 f"NOT covered; falling through to normal discovery")
             continue
-        covered.add(slug)
+        exposed = True
         for checkout in remotes.get(slug, []):
             link = checkout / "graphify-out"
             try:
@@ -193,18 +205,29 @@ def ensure_reconciler_exposure(remotes: dict[str, list[pathlib.Path]]) -> set[st
                     log(f"exposure: {slug} linked {link} -> {mirror}")
             except OSError as exc:
                 log(f"exposure: {slug} FAILED to expose at {link}: {exc}")
-    return covered
+                exposed = False
+        if exposed:
+            covered.add(slug)
+        else:
+            failed.append(slug)
+    return covered, failed
 
 
-def refresh_stale_owned_mirrors(covered: set[str], started: float) -> list[str]:
+def refresh_stale_owned_mirrors(
+    covered: set[str], remotes: dict[str, list[pathlib.Path]], started: float
+) -> tuple[list[str], list[str], list[str]]:
     """Rebuild any covered mirror whose graph is older than MAX_GRAPH_AGE_HOURS.
 
     Pulls the mirror clone to the remote tip first — a mirror graph is only as true
     as the mirror checkout. Uses the same build()/shrink-guard path as discovery
-    builds and respects the sweep budget and disk floor. Returns the slugs rebuilt.
+    builds and respects the sweep budget and disk floor. Returns rebuilt, failed,
+    and deferred slugs.
     """
     rebuilt: list[str] = []
-    for slug in sorted(covered):
+    failed: list[str] = []
+    deferred: list[str] = []
+    slugs = sorted(covered)
+    for index, slug in enumerate(slugs):
         mirror_repo = MIRRORS / slug.replace("/", "__")
         mirror_graph = mirror_repo / "graphify-out" / "graph.json"
         if not mirror_graph.exists():
@@ -214,26 +237,37 @@ def refresh_stale_owned_mirrors(covered: set[str], started: float) -> list[str]:
             continue
         if time.monotonic() - started > SWEEP_BUDGET:
             log(f"owned-refresh: sweep budget exhausted -- {slug} deferred")
+            deferred.append(slug)
             continue
         if free_gb(MIRRORS) < MIN_FREE_GB:
             log(f"owned-refresh: STOP, only {free_gb(MIRRORS):.1f}G free")
+            deferred.extend(slugs[index:])
             break
-        # Mirror clones have no interactive credential source; authenticate the
-        # way every non-interactive tool on the box does — via gh's helper.
-        # (gen-backend-python/limitless-fe failed with "could not read Username"
-        # on the first live run, 2026-08-18.)
-        git_auth = ["-c", "credential.helper=", "-c",
-                    "credential.helper=!gh auth git-credential"]
-        rc, out = sh(["git", "-C", str(mirror_repo), *git_auth,
-                      "fetch", "origin", "--quiet"], timeout=120)
+        checkouts = remotes.get(slug, [])
+        if not checkouts:
+            log(f"owned-refresh: {slug} has no canonical checkout remote")
+            failed.append(slug)
+            continue
+        rc, fetch_url = sh(
+            ["git", "-C", str(checkouts[0]), "remote", "get-url", "origin"], timeout=15
+        )
+        if rc == 0 and normalize_remote(fetch_url) != slug:
+            rc, out = 1, "origin is no longer the validated canonical remote"
+        elif rc == 0:
+            rc, out = sh(
+                ["git", "-C", str(mirror_repo), "fetch", fetch_url.strip(), "--quiet"],
+                timeout=120,
+            )
+        else:
+            out = fetch_url
         if rc == 0:
-            rc, _head = sh(["git", "-C", str(mirror_repo), "rev-parse",
-                            "--abbrev-ref", "origin/HEAD"], timeout=15)
-            ref = _head.strip() if rc == 0 and _head.strip() else "origin/main"
-            rc, out = sh(["git", "-C", str(mirror_repo), "reset", "--hard", ref],
-                         timeout=120)
+            rc, out = sh(
+                ["git", "-C", str(mirror_repo), "reset", "--hard", "FETCH_HEAD"],
+                timeout=120,
+            )
         if rc != 0:
             log(f"owned-refresh: {slug} git update FAILED: {out.strip()[-200:]}")
+            failed.append(slug)
             continue
         log(f"owned-refresh: {slug} mirror graph is {age:.0f}h old -- rebuilding")
         t0 = time.monotonic()
@@ -243,7 +277,8 @@ def refresh_stale_owned_mirrors(covered: set[str], started: float) -> list[str]:
             rebuilt.append(slug)
         else:
             log(f"  FAILED owned-refresh {slug}: {out.strip()[-300:]}")
-    return rebuilt
+            failed.append(slug)
+    return rebuilt, failed, deferred
 
 
 def discover(remotes: dict[str, list[pathlib.Path]],
@@ -303,8 +338,8 @@ def main() -> int:
         return 1
 
     remotes = remote_map()
-    covered = ensure_reconciler_exposure(remotes)
-    log(f"reconciler coverage verified: {len(covered)}/{len(RECONCILER_REMOTES)} "
+    covered, exposure_failed = ensure_reconciler_exposure(remotes)
+    log(f"reconciler mirror coverage found: {len(covered)}/{len(RECONCILER_REMOTES)} "
         f"externally_managed slug(s) have a mirror graph")
 
     # Nightly freshness FLOOR for reconciler-owned repos (2026-08-18, mav directive:
@@ -314,12 +349,16 @@ def main() -> int:
     # against the mirror clone (single writer location; checkouts see it via the
     # exposure symlinks). Deploy-triggered refresh remains the primary path — on a
     # day the repo deployed, the mirror is fresh and this is a no-op.
-    stale_owned = refresh_stale_owned_mirrors(covered, started)
+    stale_owned, owned_failed, owned_deferred = refresh_stale_owned_mirrors(
+        covered, remotes, started
+    )
 
     repos = discover(remotes, covered)
     log(f"discovered {len(repos)} active repo(s) not covered by the deploy reconciler")
 
-    results = {"built": [], "skipped_fresh": [], "failed": [], "budget_stopped": [],
+    results = {"built": [], "skipped_fresh": [],
+               "failed": exposure_failed + owned_failed,
+               "budget_stopped": owned_deferred,
                "owned_refreshed": stale_owned}
     for slug, path, commits in repos:
         if time.monotonic() - started > SWEEP_BUDGET:
@@ -359,9 +398,7 @@ def main() -> int:
     log(f"=== done in {time.monotonic() - started:.0f}s: "
         f"{len(results['built'])} built, {len(results['skipped_fresh'])} fresh, "
         f"{len(results['failed'])} failed, {len(results['budget_stopped'])} deferred ===")
-    # A failed repo is reported but is NOT a unit failure: one bad repo must not mark the
-    # whole nightly sweep red and hide that the other 20 succeeded.
-    return 0
+    return 1 if results["failed"] or results["budget_stopped"] else 0
 
 
 if __name__ == "__main__":
