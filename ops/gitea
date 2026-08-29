@@ -1,0 +1,95 @@
+#!/bin/bash
+# Minimal Gitea CLI for GEN agents — the `gh` equivalent for the canonical forge.
+# Usage:
+#   gitea pr create <owner/repo> <head-branch> <base> <title> [body]
+#   gitea pr list   <owner/repo>
+#   gitea pr view   <owner/repo> <number>
+#   gitea pr merge  <owner/repo> <number>        # squash; refused if checks red
+#   gitea checks    <owner/repo> <sha>
+#   gitea api       <path> [curl-args...]
+set -euo pipefail
+[ -r /etc/gen-gitea.env ] || { echo "missing /etc/gen-gitea.env" >&2; exit 1; }
+. /etc/gen-gitea.env
+api() { local p="$1"; shift; curl -sS -H "Authorization: token $GITEA_TOKEN" \
+  -H "User-Agent: gen-agent" -H "Content-Type: application/json" \
+  "$@" "$GITEA_URL/api/v1$p"; }
+case "${1:-}" in
+  pr)
+    case "${2:-}" in
+      create) api "/repos/$3/pulls" -X POST -d "$(python3 -c '
+import json,sys; print(json.dumps({"head":sys.argv[1],"base":sys.argv[2],"title":sys.argv[3],"body":sys.argv[4] if len(sys.argv)>4 else ""}))' "$4" "$5" "$6" "${7:-}")" \
+        | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("html_url") or "ERR: "+str(d)[:300])' ;;
+      list) api "/repos/$3/pulls?state=open" | python3 -c '
+import json,sys
+for p in json.load(sys.stdin): print(p["number"], p["title"], "|", p["head"]["ref"])' ;;
+      view) api "/repos/$3/pulls/$4" | python3 -c '
+import json,sys; d=json.load(sys.stdin)
+print(d["number"], d["title"]); print("state:", d["state"], "| mergeable:", d.get("mergeable"))
+print("head:", d["head"]["sha"]); print(d["html_url"])' ;;
+      merge)
+        # GEN-6025 — refuse the merge unless main's CURRENT head already has a
+        # TERMINAL push verdict. Under `concurrency: 1` a merge cancels the
+        # pipeline still running for the previous main sha, so a rapid series of
+        # merges leaves EVERY main sha without a verdict and gen-deployd's gate
+        # can never pass: on 2026-08-28 production sat 10 commits behind for a
+        # day while every PR page showed green. Checking only the PR's own head
+        # cannot see this — the damage is to main, not to the PR.
+        #
+        # A `pending` row is NOT trusted: a cancelled pipeline frequently leaves
+        # a stale `pending` that never resolves, so waiting on it waits forever.
+        # Anything not success/failure is treated as unknown and blocks.
+        # Override with GEN_MERGE_SKIP_MAIN_GATE=1 for a deliberate first merge
+        # onto a main that has genuinely never run CI.
+        if [ "${GEN_MERGE_SKIP_MAIN_GATE:-0}" != "1" ]; then
+          _mainsha=$(api "/repos/$3/branches/main" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("commit") or {}).get("id") or "")')
+          if [ -n "$_mainsha" ]; then
+            _verdict=$(api "/repos/$3/commits/$_mainsha/statuses?limit=50" | python3 -c '
+import json,sys
+seen={}
+for s in json.load(sys.stdin):
+    c=s["context"]
+    if c not in seen or s["id"]>seen[c]["id"]:
+        seen[c]=s
+rows=[v for k,v in seen.items() if k.startswith("ci/woodpecker/push/")]
+if not rows:
+    print("NONE")
+else:
+    pending=sorted({v["status"] for v in rows if v["status"] not in ("success","failure")})
+    print("BLOCK:"+",".join(pending) if pending else "OK")')
+            case "$_verdict" in
+              OK) ;;
+              NONE) echo "GEN-6025: main ($_mainsha) has no push ci status at all — merging now would be the first. Re-run with GEN_MERGE_SKIP_MAIN_GATE=1 if that is intended." >&2; exit 3 ;;
+              *) echo "GEN-6025: REFUSED — main ($_mainsha) ci is ${_verdict#BLOCK:}, not terminal. Merging now cancels its pipeline and leaves main with no verdict, which blocks every deploy. Wait for it, then retry." >&2; exit 3 ;;
+            esac
+          fi
+        fi
+        # Squash with the PR body as the commit body. Gitea's default squash
+        # message is the title alone, which leaves `git log`/`git blame` with no
+        # root cause for the change. The title keeps its "(#N)" suffix because
+        # downstream tooling parses the PR number out of the subject line.
+        api "/repos/$3/pulls/$4/merge" -X POST -o /dev/null -w "%{http_code}\n" \
+          -d "$(api "/repos/$3/pulls/$4" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+title = "%s (#%d)" % (d["title"], d["number"])
+body = (d.get("body") or "").strip()
+opts = {"Do": "squash", "merge_title_field": title}
+if body:
+    opts["merge_message_field"] = body
+print(json.dumps(opts))')" ;;
+      *) echo "unknown pr subcommand" >&2; exit 1 ;;
+    esac ;;
+  checks) api "/repos/$2/commits/$3/statuses?limit=50" | python3 -c '
+import json,sys
+# Newest-per-context = MAX STATUS ID, never API order: a restarted pipeline
+# lands statuses with created_at identical to the superseded run, and
+# first-seen ties kept the old canceled/failed row (caught live 2026-08-25).
+seen={}
+for s in json.load(sys.stdin):
+    c=s["context"]
+    if c not in seen or s["id"]>seen[c]["id"]:
+        seen[c]=s
+for c,s in seen.items(): print(s["status"], c)' ;;
+  api) shift; api "$@" ;;
+  *) sed -n "2,12p" "$0" >&2; exit 1 ;;
+esac
