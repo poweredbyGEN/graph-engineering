@@ -34,7 +34,7 @@ One line per consumer goes to stdout, which the unit sends to journald.
 | Repo | Regeneration | Artifacts |
 |---|---|---|
 | `gen-mcp-server` | `scripts/vendor_creation_card_branches.py`, `vendor_creation_card_matrix.py`, `vendor_user_job_enums.py`, `vendor_vidsheet_action_schema.py`, `sync_model_capabilities.py`, each with `--backend-path <clone> --ref origin/main` | `src/gen_mcp_server/contracts/`, including the `.source` sidecars those generators write |
-| `gen-agentic` | copy from the backend clone | `docs/generated/{vidsheet-operations-schema,vidsheet-semantic-draft-schema,user-job-enums}.json` → `src/gen/contracts/` |
+| `gen-agentic` | copy from the backend clone, then `scripts/build_creation_card_artifact.py` inside the `gen-agentic-ci` image (`CONTRACT_SYNC_AGENTIC_IMAGE`) | `docs/generated/{vidsheet-operations-schema,vidsheet-semantic-draft-schema,user-job-enums}.json` → `src/gen/contracts/`, plus the embedded `packages/gen-mcp-server/…/creation-cards.json` |
 | `limitless-fe` | `node scripts/sync-vidsheet-contract.mjs` with `GEN_BACKEND_PATH=<clone>` (plain copy of the artifact if that script is gone) | `src/schema/vidsheets/contracts/…schema.json` + `.source.json` + `railsContract.generated.ts` |
 | `api-docs` | `node scripts/sync-from-backend.mjs --backend <clone>` | skipped with a log line while that script does not exist |
 
@@ -129,4 +129,7 @@ treat itself as a first run and re-check every consumer.
 
 `bash`, `git` (with working git.gen.pro credentials — the unit relies on the box's git
 credential helper, not on the API token), `python3` with `PyYAML` (for
-`sync_model_capabilities.py`), `node`, `curl` and `flock`.
+`sync_model_capabilities.py`), `node`, `docker` with the `gen-agentic-ci` image, `curl` and `flock`.
+
+The sync stops at the merge. gen-deployd deploys every consumer's main, including
+`gen-mcp-server` to staging and to production (`mcp.gen.pro`).
