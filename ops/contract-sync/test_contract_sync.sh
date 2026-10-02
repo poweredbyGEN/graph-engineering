@@ -283,6 +283,9 @@ def status_mode():
         return "success"
 
 
+open_heads = []
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -302,12 +305,19 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
         if path.endswith("/pulls"):
-            return self._send(200, [])
+            return self._send(200, [{"number": 1, "state": "open", "head": {"ref": h}} for h in open_heads])
         if "/commits/" in path and path.endswith("/statuses"):
-            return self._send(200, [{"id": 1, "context": "ci/woodpecker/push/ci", "status": status_mode()}])
+            # The second context mirrors a workflow no runner executes: it stays
+            # pending forever and must never hold back a merge.
+            return self._send(200, [
+                {"id": 1, "context": "ci/woodpecker/push/ci", "status": status_mode()},
+                {"id": 2, "context": "Development Workflow / Unit Tests (pull_request)", "status": "pending"},
+            ])
         if "/branches/" in path:
             if path.endswith("/main"):
                 return self._send(200, {"name": "main", "commit": {"id": "0" * 40}})
+            if path.split("/branches/", 1)[1] in open_heads:
+                return self._send(200, {"commit": {"id": "1" * 40}})
             return self._send(404, {"message": "branch not found"})
         return self._send(404, {"message": "no route"})
 
@@ -320,6 +330,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"merged": True})
         if self.path.endswith("/pulls"):
             self._record({"path": self.path, "head": payload.get("head"), "title": payload.get("title")})
+            open_heads.append(payload.get("head"))
             return self._send(201, {"number": 1, "html_url": "http://mock.invalid/pr/1", "head": {"ref": payload.get("head")}})
         return self._send(404, {"message": "no route"})
 
@@ -498,6 +509,48 @@ assert_contains "T10 names the failing consumer" "$out" "gen-mcp-server: ERROR r
 assert_equal "T10 the later script never ran" "0" \
   "$([ -f "$STATE_DIR/gen-mcp-server/LAST_SCRIPT_RAN" ] && echo 1 || echo 0)"
 assert_equal "T10 state did not advance" "$state_before" "$(state_sha)"
+
+# -----------------------------------------------------------------------------
+# T11 — a PR whose checks are still pending is not abandoned: the state stays
+# put and the next tick re-checks the same open PR and merges it once green.
+# -----------------------------------------------------------------------------
+
+printf 'T11 pending checks are re-checked next tick\n'
+write_json "$BE_WORK/docs/generated/user-job-enums.json" 12 userjob
+commit_all "$BE_WORK" "backend v12 user-job-enums"
+git -C "$BE_WORK" push -q origin main
+be7_sha="$(git -C "$BE_WORK" rev-parse HEAD)"
+state_before="$(state_sha)"
+live_sync() {
+  CONTRACT_SYNC_STATE_DIR="$STATE_DIR" \
+    CONTRACT_SYNC_GIT_BASE="$GIT_BASE" \
+    CONTRACT_SYNC_OWNER="$OWNER" \
+    CONTRACT_SYNC_BACKEND_URL="$BE_URL" \
+    CONTRACT_SYNC_CONSUMERS="gen-agentic" \
+    CONTRACT_SYNC_STATUS_POLL_INTERVAL=1 \
+    CONTRACT_SYNC_STATUS_POLL_TIMEOUT=3 \
+    GEN_GITEA_URL="$MOCK_URL" \
+    GEN_GITEA_TOKEN="$TOKEN_SENTINEL" \
+    bash "$SYNC" >"$LIVE_OUT" 2>&1
+}
+printf 'pending\n' >"$MOCK_MODE"
+: >"$MOCK_LOG"
+rm -rf "$STATE_DIR/gen-agentic"
+rc=0
+live_sync || rc=$?
+out="$(cat "$LIVE_OUT")"
+assert_equal "T11 a pending PR is not a success" "1" "$rc"
+assert_contains "T11 says it re-checks next tick" "$out" "re-checked next tick"
+assert_equal "T11 state did not advance" "$state_before" "$(state_sha)"
+printf 'success\n' >"$MOCK_MODE"
+rm -rf "$STATE_DIR/gen-agentic"
+rc=0
+live_sync || rc=$?
+out="$(cat "$LIVE_OUT")"
+assert_equal "T11 the next tick succeeds" "0" "$rc"
+assert_contains "T11 the next tick re-checks the open PR" "$out" "re-checking it"
+assert_contains "T11 merges once green despite a never-run workflow" "$out" "merged PR #1"
+assert_equal "T11 state advances after the merge" "$be7_sha" "$(state_sha)"
 
 # -----------------------------------------------------------------------------
 # T6 — the token value has exactly one home: a curl header argument.

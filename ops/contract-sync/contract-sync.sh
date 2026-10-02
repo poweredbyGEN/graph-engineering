@@ -438,20 +438,22 @@ merge_pr() { # <repo> <number> <style> — HTTP status on stdout
   gitea_status_code POST "/repos/$GITEA_OWNER/$repo/pulls/$number/merge" "$payload"
 }
 
-merge_when_green() { # <repo> <number> <head-sha> — 0 merged, 10 left open, 1 error
+merge_when_green() { # <repo> <number> <head-sha> — 0 merged, 10 left open, 11 retry next tick, 1 error
   local repo="$1" number="$2" head_sha="$3"
   local verdict main_sha main_verdict tried style code
 
-  verdict="$(await_checks "$repo" "$head_sha" "" "$STATUS_POLL_TIMEOUT" "no")"
+  # Only ci/woodpecker/* gates a merge, as in branch protection. Other contexts
+  # (GitHub-Actions workflows no runner executes) stay pending forever.
+  verdict="$(await_checks "$repo" "$head_sha" "ci/woodpecker/" "$STATUS_POLL_TIMEOUT" "no")"
   case "$verdict" in
     GREEN) ;;
     NONE)
-      log "$repo: no check status for $head_sha; leaving PR #$number open"
-      return 10
+      log "$repo: no check status for $head_sha yet; PR #$number is re-checked next tick"
+      return 11
       ;;
     PENDING:*)
-      log "$repo: checks still pending (${verdict#PENDING:}) after ${STATUS_POLL_TIMEOUT}s; leaving PR #$number open"
-      return 10
+      log "$repo: checks still pending (${verdict#PENDING:}) after ${STATUS_POLL_TIMEOUT}s; PR #$number is re-checked next tick"
+      return 11
       ;;
     RED:*)
       log "$repo: checks not green (${verdict#RED:}); leaving PR #$number open"
@@ -472,8 +474,8 @@ merge_when_green() { # <repo> <number> <head-sha> — 0 merged, 10 left open, 1 
   case "$main_verdict" in
     GREEN | NONE) ;;
     *)
-      log "$repo: $CONSUMER_BRANCH $main_sha push pipeline is ${main_verdict#*:}; leaving PR #$number open"
-      return 10
+      log "$repo: $CONSUMER_BRANCH $main_sha push pipeline is ${main_verdict#*:}; PR #$number is re-checked next tick"
+      return 11
       ;;
   esac
 
@@ -559,8 +561,10 @@ process_consumer() { # <name> <backend-sha> <backend-clone>
   if [ "$branch_rc" = "0" ]; then
     pr_number="$(find_open_pr "$name" "$branch")"
     if [ -n "$pr_number" ]; then
-      log "$name: PR #$pr_number is already open for ${backend_sha:0:8}; leaving it for review"
-      return 10
+      head_sha="$(json_scalar <(gitea_request GET "/repos/$GITEA_OWNER/$name/branches/$branch" || true) "commit.id")"
+      log "$name: PR #$pr_number is already open for ${backend_sha:0:8}; re-checking it"
+      merge_when_green "$name" "$pr_number" "$head_sha"
+      return $?
     fi
     log "$name: ERROR branch $branch exists with no open PR; refusing to reuse it"
     return 1
@@ -688,12 +692,14 @@ fi
 
 failed=0
 handed_off=0
+retry=0
 for name in "${CONSUMERS[@]}"; do
   rc=0
   process_consumer "$name" "$backend_sha" "$backend_clone" || rc=$?
   case "$rc" in
     0) ;;
     10) handed_off=1 ;;
+    11) retry=1 ;;
     *) failed=1 ;;
   esac
 done
@@ -701,9 +707,11 @@ done
 # Advance only after every consumer reached a terminal disposition. A hard
 # error leaves the state untouched so the next tick retries the same change
 # instead of silently dropping it.
-if [ "$failed" = "0" ]; then
+if [ "$failed" = "0" ] && [ "$retry" = "0" ]; then
   record_state "$backend_sha" "$MANIFEST_TMP_FILE"
   log "backend main ${backend_sha:0:8}: state advanced"
+elif [ "$failed" = "0" ]; then
+  log "backend main ${backend_sha:0:8}: a sync PR is still waiting on checks; state not advanced, the next tick re-checks it"
 else
   log "backend main ${backend_sha:0:8}: a consumer errored; state not advanced, the next tick retries"
 fi
@@ -711,7 +719,7 @@ fi
 if [ "$failed" != "0" ]; then
   exit 1
 fi
-if [ "$handed_off" != "0" ]; then
+if [ "$handed_off" != "0" ] || [ "$retry" != "0" ]; then
   exit 1
 fi
 exit 0
