@@ -33,7 +33,7 @@ One line per consumer goes to stdout, which the unit sends to journald.
 
 | Repo | Regeneration | Artifacts |
 |---|---|---|
-| `gen-mcp-server` | `scripts/vendor_creation_card_branches.py`, `vendor_creation_card_matrix.py`, `vendor_user_job_enums.py`, `vendor_vidsheet_action_schema.py`, `sync_model_capabilities.py`, each with `--backend-path <clone> --ref origin/main` | `src/gen_mcp_server/contracts/`, including the `.source` sidecars those generators write |
+| `gen-mcp-server` | `scripts/refresh_contracts.py --backend-path <clone> --ref origin/main` inside `CONTRACT_SYNC_MCP_IMAGE` (default `python:3.12-bookworm`, which carries git); it re-vendors every artifact and moves the pins that must change with them (action-schema hash, catalog record, rc09 tool cards). A checkout without that script falls back to the bare `MCP_REGENERATE` vendor list | `src/gen_mcp_server/contracts/`, the `.source` sidecars, `tests/test_rc05_typed_actions.py`, `tests/fixtures/rc09_tool_cards.json` |
 | `gen-agentic` | copy from the backend clone, then `scripts/build_creation_card_artifact.py` inside the `gen-agentic-ci` image (`CONTRACT_SYNC_AGENTIC_IMAGE`) | `docs/generated/{vidsheet-operations-schema,vidsheet-semantic-draft-schema,user-job-enums}.json` → `src/gen/contracts/`, plus the embedded `packages/gen-mcp-server/…/creation-cards.json` |
 | `limitless-fe` | `node scripts/sync-vidsheet-contract.mjs` with `GEN_BACKEND_PATH=<clone>` (plain copy of the artifact if that script is gone) | `src/schema/vidsheets/contracts/…schema.json` + `.source.json` + `railsContract.generated.ts` |
 | `api-docs` | `node scripts/sync-from-backend.mjs --backend <clone>` | skipped with a log line while that script does not exist |

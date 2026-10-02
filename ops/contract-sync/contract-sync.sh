@@ -48,6 +48,7 @@ CURL_TIMEOUT="${CONTRACT_SYNC_CURL_TIMEOUT:-30}"
 GIT_TIMEOUT="${CONTRACT_SYNC_GIT_TIMEOUT:-300}"
 REGEN_TIMEOUT="${CONTRACT_SYNC_REGEN_TIMEOUT:-600}"
 AGENTIC_IMAGE="${CONTRACT_SYNC_AGENTIC_IMAGE:-git.gen.pro/gen/gen-agentic-ci:py311}"
+MCP_IMAGE="${CONTRACT_SYNC_MCP_IMAGE:-python:3.12-bookworm}"
 STATUS_POLL_INTERVAL="${CONTRACT_SYNC_STATUS_POLL_INTERVAL:-20}"
 STATUS_POLL_TIMEOUT="${CONTRACT_SYNC_STATUS_POLL_TIMEOUT:-900}"
 MAIN_PIPELINE_WAIT="${CONTRACT_SYNC_MAIN_PIPELINE_WAIT:-180}"
@@ -290,6 +291,19 @@ record_state() { # <backend-sha> <manifest-file>
 
 regen_gen_mcp_server() { # <consumer-clone> <backend-clone>
   local clone="$1" backend="$2" script
+  # scripts/refresh_contracts.py re-vendors AND moves the pins that must change
+  # with the artifacts (action-schema hash, catalog record, rc09 tool cards).
+  # Vendoring alone leaves the sync PR red (GEN-8145). The pins need the
+  # package installed, so it runs in a Python image that also carries git.
+  if [ -f "$clone/scripts/refresh_contracts.py" ]; then
+    timeout "$REGEN_TIMEOUT" docker run --rm --cpus 2 \
+      -v "$clone":/w -v "$backend":/backend -w /w "$MCP_IMAGE" sh -c \
+      'git config --global --add safe.directory "*" &&
+        pip install -q -e . pytest >/dev/null 2>&1 &&
+        python scripts/refresh_contracts.py --backend-path /backend --ref "origin/$0"' \
+      "$BACKEND_BRANCH" || return $?
+    return 0
+  fi
   for script in "${MCP_REGENERATE[@]}"; do
     ( cd "$clone" && timeout "$REGEN_TIMEOUT" python3 "$script" \
         --backend-path "$backend" --ref "origin/$BACKEND_BRANCH" ) || return $?
