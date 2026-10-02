@@ -596,7 +596,33 @@ process_consumer() { # <name> <backend-sha> <backend-clone>
   fi
 
   log "$name: PR #$pr_number opened for $head_sha; waiting for checks"
-  merge_when_green "$name" "$pr_number" "$head_sha"
+  local rc=0
+  merge_when_green "$name" "$pr_number" "$head_sha" || rc=$?
+  [ "$rc" = 0 ] && [ "$name" = "gen-mcp-server" ] && deploy_hosted_mcp "$clone"
+  return "$rc"
+}
+
+# mcp.gen.pro is not deployed by deployd: a merged gen-mcp-server change stays
+# dark until scripts/deploy_hosted.sh runs, so the sync deploys what it merged
+# and verifies the live handshake. A failed deploy is logged and leaves the
+# previous release serving (activate only switches after a successful build).
+deploy_hosted_mcp() { # <clone>
+  local clone="$1" sha
+  [ "${CONTRACT_SYNC_DEPLOY_MCP:-1}" = "1" ] || { log "gen-mcp-server: hosted deploy disabled"; return 0; }
+  if ! { git -C "$clone" fetch -q origin "$CONSUMER_BRANCH" && git -C "$clone" checkout -q --detach FETCH_HEAD; }; then
+    log "gen-mcp-server: ERROR cannot check out merged $CONSUMER_BRANCH for the hosted deploy"
+    return 1
+  fi
+  sha="$(git -C "$clone" rev-parse HEAD)"
+  if (cd "$clone" && timeout 1200 scripts/deploy_hosted.sh build --sha "$sha" && timeout 600 scripts/deploy_hosted.sh activate --sha "$sha"); then
+    if (cd "$clone" && timeout 120 python3 scripts/verify_hosted_tools.py --drift --source-sha "$sha"); then
+      log "gen-mcp-server: hosted MCP deployed and verified at $sha"
+    else
+      log "gen-mcp-server: ERROR hosted MCP at $sha failed the live handshake check"; return 1
+    fi
+  else
+    log "gen-mcp-server: ERROR hosted deploy of $sha failed; the previous release keeps serving"; return 1
+  fi
 }
 
 # -----------------------------------------------------------------------------
