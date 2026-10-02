@@ -310,7 +310,7 @@ class Handler(BaseHTTPRequestHandler):
             # The second context mirrors a workflow no runner executes: it stays
             # pending forever and must never hold back a merge.
             return self._send(200, [
-                {"id": 1, "context": "ci/woodpecker/push/ci", "status": status_mode()},
+                {"id": 1, "context": "ci/woodpecker/push/ci", "status": "success" if status_mode() == "behind" else status_mode()},
                 {"id": 2, "context": "Development Workflow / Unit Tests (pull_request)", "status": "pending"},
             ])
         if "/branches/" in path:
@@ -327,7 +327,12 @@ class Handler(BaseHTTPRequestHandler):
         payload = json.loads(raw or b"{}")
         if self.path.endswith("/merge"):
             self._record({"path": self.path, "do": payload.get("Do")})
+            if status_mode() == "behind":
+                return self._send(405, {"message": "Not possible to fast-forward"})
             return self._send(200, {"merged": True})
+        if "/update" in self.path:
+            self._record({"path": self.path, "update": True})
+            return self._send(200, {})
         if self.path.endswith("/pulls"):
             self._record({"path": self.path, "head": payload.get("head"), "title": payload.get("title")})
             open_heads.append(payload.get("head"))
@@ -551,6 +556,28 @@ assert_equal "T11 the next tick succeeds" "0" "$rc"
 assert_contains "T11 the next tick re-checks the open PR" "$out" "re-checking it"
 assert_contains "T11 merges once green despite a never-run workflow" "$out" "merged PR #1"
 assert_equal "T11 state advances after the merge" "$be7_sha" "$(state_sha)"
+
+# -----------------------------------------------------------------------------
+# T12 — a fast-forward-only repo whose main moved refuses the merge; the sync
+# rebases the PR server-side and re-checks it next tick instead of handing off.
+# -----------------------------------------------------------------------------
+
+printf 'T12 a branch behind main is rebased and retried\n'
+write_json "$BE_WORK/docs/generated/user-job-enums.json" 13 userjob
+commit_all "$BE_WORK" "backend v13 user-job-enums"
+git -C "$BE_WORK" push -q origin main
+state_before="$(state_sha)"
+printf 'behind\n' >"$MOCK_MODE"
+: >"$MOCK_LOG"
+rm -rf "$STATE_DIR/gen-agentic"
+rc=0
+live_sync || rc=$?
+out="$(cat "$LIVE_OUT")"
+assert_equal "T12 a refused merge is not a success" "1" "$rc"
+assert_contains "T12 rebases the PR" "$out" "rebased it onto main, re-checked next tick"
+assert_contains "T12 calls the rebase endpoint" "$(cat "$MOCK_LOG")" "update?style=rebase"
+assert_equal "T12 state did not advance" "$state_before" "$(state_sha)"
+printf 'success\n' >"$MOCK_MODE"
 
 # -----------------------------------------------------------------------------
 # T6 — the token value has exactly one home: a curl header argument.

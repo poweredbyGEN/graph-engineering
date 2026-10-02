@@ -488,7 +488,15 @@ merge_when_green() { # <repo> <number> <head-sha> — 0 merged, 10 left open, 11
       return 0
     fi
   done
-  log "$repo: merge refused for PR #$number ($tried -> HTTP $code); leaving it open"
+  # A fast-forward-only repo refuses the merge once main has moved past the
+  # sync branch. Rebase the PR onto main server-side; its pipeline re-runs and
+  # the next tick re-checks and merges it.
+  code="$(gitea_status_code POST "/repos/$GITEA_OWNER/$repo/pulls/$number/update?style=rebase")"
+  if [ "$code" = "200" ]; then
+    log "$repo: merge refused for PR #$number ($tried); rebased it onto $CONSUMER_BRANCH, re-checked next tick"
+    return 11
+  fi
+  log "$repo: merge refused for PR #$number ($tried) and rebase onto $CONSUMER_BRANCH failed (HTTP $code); leaving it open"
   return 10
 }
 
