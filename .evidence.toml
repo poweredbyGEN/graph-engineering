@@ -47,6 +47,16 @@ env = { PYTHONPATH = "traces" }
 name = "ops"
 cmd = ["python3", "-m", "pytest", "ops/tests/", "-q"]
 
+[[checks]]
+name = "contract-sync"
+# The offline contract-sync test. It builds its own bare repositories under
+# /mnt/data/tmp and asserts the planned branch/commit/PR/merge, the two no-op
+# paths (same backend sha, unwatched change), the converged-consumer no-diff
+# path, and that the API token is never printed. Without it the sync script can
+# rot into a no-op that still exits 0, which is indistinguishable from a backend
+# that never changed.
+cmd = ["bash", "ops/contract-sync/test_contract_sync.sh"]
+
 # Not a test suite -- an assertion that the DOCS still describe the code. Cheap, and it is
 # the check most likely to actually fire, because prose rots faster than code.
 [[checks]]

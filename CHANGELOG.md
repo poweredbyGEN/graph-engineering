@@ -8,6 +8,15 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- `ops/contract-sync/`: a systemd timer that detects a change to a gen-backend-v2 contract
+  artifact (`docs/generated/**`, `config/creation_cards.yml`, `config/model_capabilities.yml`),
+  runs each consumer repository's own regeneration command, and opens a PR only when that
+  produces a diff. The PR merges unattended once every newest-per-context status on its head
+  is a success and main's own push pipeline is terminal; a red or pending PR is left open and
+  logged. A hard failure leaves the change queued for the next tick. An offline test
+  (`ops/contract-sync/test_contract_sync.sh`) drives the whole path against local bare
+  repositories and a mock forge.
+
 - CI approves the repo operator's exact public squash-merge identity at the sanctioned
   `--allowed-commit-name` boundary, so default-branch pushes can reach a green verdict again.
 

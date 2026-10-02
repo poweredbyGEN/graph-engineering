@@ -1,0 +1,43 @@
+[Unit]
+Description=Sync gen-backend-v2 contract changes into every consumer repo
+Documentation=file:///opt/agent-infra/ops/contract-sync/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust the checkout path if the repo is installed elsewhere; see
+# ops/contract-sync/README.md. The script resolves everything relative to itself.
+ExecStart=/bin/bash /opt/agent-infra/ops/contract-sync/contract-sync.sh
+
+# The Gitea API token for push/PR/merge lives here; it is never written by the
+# script, and a missing file is tolerated so the unit still starts.
+EnvironmentFile=-/etc/contract-sync.env
+
+# git reads ~/.gitconfig for the git.gen.pro credential helper, so HOME must
+# point at the account whose credentials are installed. GIT_TERMINAL_PROMPT=0 is
+# also set inside the script: a credential prompt would hang the unit forever.
+Environment=HOME=/root
+
+# Clones and the last-synced state all live here. StateDirectory creates
+# /var/lib/contract-sync and grants write access to it.
+StateDirectory=contract-sync
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+
+# Cloning four repos and waiting on a pipeline is IO-heavy in bursts. Yield to
+# anything interactive rather than compete with a foreground agent.
+Nice=10
+IOSchedulingClass=idle
+IOWeight=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=contract-sync
+
+# Backstop above the script's own budgets: clones (5 min each), regeneration
+# (10 min each), a 15 min check poll and a 3 min main-pipeline wait.
+TimeoutStartSec=2700

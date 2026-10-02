@@ -1,0 +1,22 @@
+[Unit]
+Description=Check gen-backend-v2 for contract changes every 10 minutes
+Documentation=file:///opt/agent-infra/ops/contract-sync/README.md
+
+[Timer]
+# Every 10 minutes. A merge to gen-backend-v2 main is the only trigger; a
+# consumer's freshness gate goes red within one interval and clears as soon as
+# its sync PR is green.
+OnCalendar=*:0/10
+
+# A tick that overlaps a still-running sync is skipped by the script's own
+# flock, so a slow run delays the next check by one interval rather than
+# stacking a second copy of every clone on top of it.
+AccuracySec=30s
+RandomizedDelaySec=30
+
+# A missed tick (box down, reboot) runs on the next boot instead of leaving a
+# contract change unsynced until the backend happens to move again.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

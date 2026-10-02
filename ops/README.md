@@ -8,6 +8,7 @@ happening**.
 |---|---|
 | [`graphify/`](graphify) | A code graph that silently goes stale or fills with untracked scratch. A contaminated graph looks identical to a good one at the point of use. |
 | [`adoption/`](adoption) | Shipping a practice nobody adopts. A skill that fires constantly and one that has never fired look the same from the outside. |
+| [`contract-sync/`](contract-sync) | A backend contract change that reaches the consumers only when someone notices a red freshness gate. |
 | [`check-docs-accurate.py`](check-docs-accurate.py) | Documentation that describes code it no longer matches. |
 
 ## check-docs-accurate.py
@@ -46,6 +47,23 @@ Sabotage-checked: rotting a count, rotting a bare count, and rotting the total e
 is skipped, for prose that deliberately quotes a past wrong number to explain an incident.
 Verified by sabotage: a genuinely stale claim carrying that marker is NOT caught. It is an
 opt-out, not a nuance the checker can infer — which is why it has to be typed on purpose.
+
+## contract-sync/
+
+```bash
+bash ops/contract-sync/test_contract_sync.sh
+```
+
+gen-backend-v2 owns the generated contracts; every consumer vendors a copy and gates its
+freshness. Between the backend merge and the consumer PR there used to be a person noticing
+a red pipeline. [`contract-sync/`](contract-sync) runs the consumer's own generator against
+backend `main` every 10 minutes and opens a PR only when that produces a diff, merging it
+when the checks are green.
+
+Its own failure mode is the one this directory exists for: a sync that silently stops
+running looks exactly like a backend that never changed. So it logs one line per consumer to
+journald, and the state file only advances when every consumer reached a terminal
+disposition — a hard failure leaves the change queued for the next tick rather than dropped.
 
 ## graphify/ and adoption/
 
