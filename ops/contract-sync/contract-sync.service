@@ -18,6 +18,15 @@ EnvironmentFile=-/etc/contract-sync.env
 # point at the account whose credentials are installed. GIT_TERMINAL_PROMPT=0 is
 # also set inside the script: a credential prompt would hang the unit forever.
 Environment=HOME=/root
+# ProtectHome makes /root read-only, so the `store` credential helper cannot
+# take its lock to re-save a credential after each use. This helper only
+# answers `get` from the default store file; rotating the credential means
+# updating that file outside the unit.
+Environment=GIT_CONFIG_COUNT=2
+Environment=GIT_CONFIG_KEY_0=credential.helper
+Environment=GIT_CONFIG_VALUE_0=
+Environment=GIT_CONFIG_KEY_1=credential.helper
+Environment="GIT_CONFIG_VALUE_1=!f() { test \"$1\" = get && exec git credential-store get; }; f"
 
 # Clones and the last-synced state all live here. StateDirectory creates
 # /var/lib/contract-sync and grants write access to it.

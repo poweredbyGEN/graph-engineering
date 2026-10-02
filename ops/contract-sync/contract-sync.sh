@@ -346,7 +346,11 @@ regen_api_docs() { # <consumer-clone> <backend-clone>
     return 20
   fi
   ( cd "$clone" && timeout "$REGEN_TIMEOUT" node scripts/sync-from-backend.mjs \
-      --backend "$backend" )
+      --backend "$backend" ) || return $?
+  # openapi.yaml's operation regions render from the contracts the step above
+  # vendors; api-docs CI checks both outputs, so both regenerate together.
+  [ -f "$clone/scripts/sync_mcp_surface.py" ] || return 0
+  ( cd "$clone" && timeout "$REGEN_TIMEOUT" python3 scripts/sync_mcp_surface.py )
 }
 
 # -----------------------------------------------------------------------------
