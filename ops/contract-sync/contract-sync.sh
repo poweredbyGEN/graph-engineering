@@ -614,7 +614,7 @@ deploy_hosted_mcp() { # <clone>
     return 1
   fi
   sha="$(git -C "$clone" rev-parse HEAD)"
-  if (cd "$clone" && timeout 1200 scripts/deploy_hosted.sh build --sha "$sha" && timeout 600 scripts/deploy_hosted.sh activate --sha "$sha"); then
+  if (cd "$clone" && timeout 1200 bash scripts/deploy_hosted.sh build --sha "$sha" && timeout 600 bash scripts/deploy_hosted.sh activate --sha "$sha"); then
     if (cd "$clone" && timeout 120 python3 scripts/verify_hosted_tools.py --drift --source-sha "$sha"); then
       log "gen-mcp-server: hosted MCP deployed and verified at $sha"
     else
