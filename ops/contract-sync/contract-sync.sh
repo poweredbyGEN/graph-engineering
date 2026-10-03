@@ -1,5 +1,5 @@
 #!/bin/bash
-# contract-sync — propagate gen-backend-v2 contract changes to every consumer.
+# contract-sync — propagate backend contracts and the public MCP projection.
 #
 # gen-backend-v2 owns the generated contracts (docs/generated/**, the creation
 # card and model capability configs). Each consumer vendors a byte-identical
@@ -34,15 +34,21 @@ BACKEND_REPO="${CONTRACT_SYNC_BACKEND_REPO:-gen-backend-v2}"
 BACKEND_BRANCH="${CONTRACT_SYNC_BACKEND_BRANCH:-main}"
 CONSUMER_BRANCH="${CONTRACT_SYNC_CONSUMER_BRANCH:-main}"
 BACKEND_URL="${CONTRACT_SYNC_BACKEND_URL:-$GIT_BASE/$GITEA_OWNER/$BACKEND_REPO.git}"
+MCP_SOURCE_REPO="${CONTRACT_SYNC_MCP_REPO:-gen-mcp-server}"
+MCP_SOURCE_BRANCH="${CONTRACT_SYNC_MCP_BRANCH:-main}"
+MCP_SOURCE_URL="${CONTRACT_SYNC_MCP_URL:-$GIT_BASE/$GITEA_OWNER/$MCP_SOURCE_REPO.git}"
 DRY_RUN="${DRY_RUN:-0}"
 
 BRANCH_PREFIX="auto/contract-sync-"
 LAST_BE_SHA_FILE="$STATE_DIR/last-be-sha"
 LAST_BE_MANIFEST_FILE="$STATE_DIR/last-be-watched.tsv"
+LAST_MCP_SHA_FILE="$STATE_DIR/last-mcp-sha"
+LAST_MCP_MANIFEST_FILE="$STATE_DIR/last-mcp-watched.tsv"
 LOCK_FILE="$STATE_DIR/lock"
 PRS_FILE="$STATE_DIR/.pulls.json"
 STATUS_TMP_FILE="$STATE_DIR/.pull-statuses.json"
 MANIFEST_TMP_FILE="$STATE_DIR/.watched-manifest.new"
+MCP_MANIFEST_TMP_FILE="$STATE_DIR/.mcp-watched-manifest.new"
 
 CURL_TIMEOUT="${CONTRACT_SYNC_CURL_TIMEOUT:-30}"
 GIT_TIMEOUT="${CONTRACT_SYNC_GIT_TIMEOUT:-300}"
@@ -61,6 +67,14 @@ WATCHED_PATHS=(
   "docs/generated"
   "config/creation_cards.yml"
   "config/model_capabilities.yml"
+)
+
+# Rails owns backend contracts; the MCP owns its public tool/route projection.
+# Both catalog records trigger docs regeneration, never backend consumer work
+# on an MCP-only change (GEN-8246).
+MCP_WATCHED_PATHS=(
+  "src/gen_mcp_server/contracts/catalog-record/schema-paths.tsv"
+  "src/gen_mcp_server/contracts/catalog-record/contract-paths.tsv"
 )
 
 # gen-mcp-server regeneration, in this order. These are the vendor_*.py scripts
@@ -249,24 +263,29 @@ clone_repo() { # <url> <branch> <dir>
   return 0
 }
 
-remote_backend_sha() {
-  timeout "$GIT_TIMEOUT" git ls-remote "$BACKEND_URL" "refs/heads/$BACKEND_BRANCH" \
+remote_source_sha() { # <url> <branch>
+  timeout "$GIT_TIMEOUT" git ls-remote "$1" "refs/heads/$2" \
     | awk 'NR==1 {print $1}'
 }
 
 # "<blob-sha>\t<path>" for every watched file, sorted by git. Comparing this
 # against the stored manifest answers "did a watched path change" without
 # needing the previous commit's tree, which a depth-1 clone does not have.
-watched_manifest() { # <backend-clone>
-  git -C "$1" ls-tree -r HEAD -- "${WATCHED_PATHS[@]}" | awk '{print $3 "\t" $4}'
+watched_manifest() { # <source-clone> <path...>
+  local clone="$1"
+  shift
+  git -C "$clone" ls-tree -r HEAD -- "$@" | awk '{print $3 "\t" $4}'
 }
 
-commit_message_file() { # <file> <subject> <backend-sha> <path...>
-  local file="$1" subject="$2" sha="$3"
-  shift 3
+commit_message_file() { # <file> <subject> <backend-sha> <mcp-sha-or-empty> <path...>
+  local file="$1" subject="$2" sha="$3" mcp_sha="$4"
+  shift 4
   {
     printf '%s\n\n' "$subject"
     printf 'Synced from gen-backend-v2 %s.\n\n' "$sha"
+    if [ -n "$mcp_sha" ]; then
+      printf 'Public MCP projection from gen-mcp-server %s.\n\n' "$mcp_sha"
+    fi
     printf '%s\n' "$@"
   } >"$file"
 }
@@ -278,6 +297,19 @@ record_state() { # <backend-sha> <manifest-file>
   mv -f "$LAST_BE_MANIFEST_FILE.new" "$LAST_BE_MANIFEST_FILE"
   printf '%s\n' "$1" >"$LAST_BE_SHA_FILE.new"
   mv -f "$LAST_BE_SHA_FILE.new" "$LAST_BE_SHA_FILE"
+}
+
+record_sources() { # <backend-sha> <mcp-sha>
+  # A plan cannot consume a change that a later real tick still owes (GEN-8246).
+  if [ "$DRY_RUN" = "1" ]; then
+    log "DRY_RUN: source state not advanced"
+    return 0
+  fi
+  record_state "$1" "$MANIFEST_TMP_FILE"
+  cp -f "$MCP_MANIFEST_TMP_FILE" "$LAST_MCP_MANIFEST_FILE.new"
+  mv -f "$LAST_MCP_MANIFEST_FILE.new" "$LAST_MCP_MANIFEST_FILE"
+  printf '%s\n' "$2" >"$LAST_MCP_SHA_FILE.new"
+  mv -f "$LAST_MCP_SHA_FILE.new" "$LAST_MCP_SHA_FILE"
 }
 
 # -----------------------------------------------------------------------------
@@ -353,17 +385,44 @@ regen_limitless_fe() { # <consumer-clone> <backend-clone>
 }
 
 # 20 means "skip": the repo does not carry a regeneration command yet.
-regen_api_docs() { # <consumer-clone> <backend-clone>
-  local clone="$1" backend="$2"
+regen_api_docs() { # <consumer-clone> <backend-clone> <mcp-clone> <mcp-sha>
+  local clone="$1" backend="$2" mcp="$3" mcp_sha="$4"
   if [ ! -f "$clone/scripts/sync-from-backend.mjs" ]; then
     SKIP_REASON="scripts/sync-from-backend.mjs is not on $CONSUMER_BRANCH yet"
     return 20
   fi
+  # The docs generator checks tool parity, so its offline snapshot precedes
+  # the registry render. Both read the same immutable clone (GEN-8246).
+  ( cd "$clone" && timeout "$REGEN_TIMEOUT" node scripts/update-mcp-tools-snapshot.mjs \
+      --offline --aliases-repo "$mcp" --ref "$mcp_sha" ) || return $?
+  # The snapshot generator stamps generated_at even when its content matches.
+  # Revert only that timestamp-only diff rather than publishing a clock tick.
+  if python3 - "$clone" <<'PY'
+import json
+import pathlib
+import subprocess
+import sys
+clone = pathlib.Path(sys.argv[1])
+relative = "scripts/mcp-tools-snapshot.json"
+try:
+    prior = json.loads(subprocess.check_output(["git", "-C", str(clone), "show", f"HEAD:{relative}"], stderr=subprocess.DEVNULL))
+    current = json.loads((clone / relative).read_text())
+except (OSError, ValueError, subprocess.CalledProcessError):
+    raise SystemExit(1)
+for item in (prior, current):
+    item.pop("generated_at", None)
+raise SystemExit(0 if prior == current else 1)
+PY
+  then
+    git -C "$clone" checkout -- scripts/mcp-tools-snapshot.json || return $?
+  fi
   ( cd "$clone" && timeout "$REGEN_TIMEOUT" node scripts/sync-from-backend.mjs \
-      --backend "$backend" ) || return $?
+      --backend "$backend" --mcp-repo "$mcp" ) || return $?
   # openapi.yaml's operation regions render from the contracts the step above
   # vendors; api-docs CI checks both outputs, so both regenerate together.
   [ -f "$clone/scripts/sync_mcp_surface.py" ] || return 0
+  ( cd "$clone" && timeout "$REGEN_TIMEOUT" python3 scripts/sync_mcp_surface.py \
+      --derive-servers --mcp-src "$mcp" ) || return $?
   ( cd "$clone" && timeout "$REGEN_TIMEOUT" python3 scripts/sync_mcp_surface.py )
 }
 
@@ -524,12 +583,18 @@ merge_when_green() { # <repo> <number> <head-sha> — 0 merged, 10 left open, 11
 # or 1 (error, so the next tick retries instead of losing the change).
 # -----------------------------------------------------------------------------
 
-process_consumer() { # <name> <backend-sha> <backend-clone>
-  local name="$1" backend_sha="$2" backend="$3"
+process_consumer() { # <name> <backend-sha> <backend-clone> <mcp-sha> <mcp-clone>
+  local name="$1" backend_sha="$2" backend="$3" mcp_sha="$4" mcp="$5"
   local clone="$STATE_DIR/$name"
   local url="$GIT_BASE/$GITEA_OWNER/$name.git"
   local branch="$BRANCH_PREFIX${backend_sha:0:8}"
   local title="chore: sync backend contracts to gen-backend-v2 ${backend_sha:0:8}"
+  local provenance_mcp=""
+  if [ "$name" = "api-docs" ]; then
+    branch="$branch-${mcp_sha:0:8}"
+    title="chore: sync API contracts from backend ${backend_sha:0:8} and MCP ${mcp_sha:0:8}"
+    provenance_mcp="$mcp_sha"
+  fi
   local regen_rc=0 pr_number="" head_sha="" body="" status_file
   local -a changed_paths=()
   local entry
@@ -545,7 +610,7 @@ process_consumer() { # <name> <backend-sha> <backend-clone>
     gen-mcp-server) regen_gen_mcp_server "$clone" "$backend" || regen_rc=$? ;;
     gen-agentic) regen_gen_agentic "$clone" "$backend" || regen_rc=$? ;;
     limitless-fe) regen_limitless_fe "$clone" "$backend" || regen_rc=$? ;;
-    api-docs) regen_api_docs "$clone" "$backend" || regen_rc=$? ;;
+    api-docs) regen_api_docs "$clone" "$backend" "$mcp" "$mcp_sha" || regen_rc=$? ;;
     *)
       log "$name: ERROR no regeneration command is defined"
       return 1
@@ -576,7 +641,7 @@ process_consumer() { # <name> <backend-sha> <backend-clone>
   fi
 
   if [ "$DRY_RUN" = "1" ]; then
-    log "$name: ${#changed_paths[@]} file(s) changed — DRY_RUN plan: branch $branch, commit \"$title\", push, open PR, poll checks, merge (fast-forward-only then rebase); paths: ${changed_paths[*]}"
+    log "$name: ${#changed_paths[@]} file(s) changed — DRY_RUN plan: branch $branch, commit \"$title\", push, open PR, poll checks, merge (fast-forward-only then rebase); backend $backend_sha${provenance_mcp:+; MCP $provenance_mcp}; paths: ${changed_paths[*]}"
     return 0
   fi
 
@@ -607,7 +672,7 @@ process_consumer() { # <name> <backend-sha> <backend-clone>
     log "$name: ERROR cannot stage the regenerated files"
     return 1
   }
-  commit_message_file "$STATE_DIR/.commit-msg.$name" "$title" "$backend_sha" "${changed_paths[@]}"
+  commit_message_file "$STATE_DIR/.commit-msg.$name" "$title" "$backend_sha" "$provenance_mcp" "${changed_paths[@]}"
   git -C "$clone" -c user.name="$COMMIT_NAME" -c user.email="$COMMIT_EMAIL" \
     commit -q -F "$STATE_DIR/.commit-msg.$name" || {
     log "$name: ERROR cannot commit the regenerated files"
@@ -627,6 +692,9 @@ process_consumer() { # <name> <backend-sha> <backend-clone>
   if [ -z "$pr_number" ]; then
     body="$(printf 'Synced from gen-backend-v2 %s.\n\nChanged paths:\n\n%s\n' \
       "$backend_sha" "${changed_paths[*]}")"
+    if [ -n "$provenance_mcp" ]; then
+      body="$(printf '%s\n\nPublic MCP projection from gen-mcp-server %s.\n' "$body" "$provenance_mcp")"
+    fi
     pr_number="$(create_pr "$name" "$branch" "$title" "$body")"
   fi
   if [ -z "$pr_number" ]; then
@@ -667,9 +735,14 @@ else
   require_token
 fi
 
-backend_sha="$(remote_backend_sha || true)"
+backend_sha="$(remote_source_sha "$BACKEND_URL" "$BACKEND_BRANCH" || true)"
 if [ -z "$backend_sha" ]; then
   log "ERROR cannot resolve $BACKEND_URL refs/heads/$BACKEND_BRANCH"
+  exit 1
+fi
+mcp_sha="$(remote_source_sha "$MCP_SOURCE_URL" "$MCP_SOURCE_BRANCH" || true)"
+if [ -z "$mcp_sha" ]; then
+  log "ERROR cannot resolve $MCP_SOURCE_URL refs/heads/$MCP_SOURCE_BRANCH"
   exit 1
 fi
 
@@ -678,8 +751,14 @@ if [ -r "$LAST_BE_SHA_FILE" ]; then
   last_sha="$(cat "$LAST_BE_SHA_FILE")"
 fi
 
-if [ "$backend_sha" = "$last_sha" ]; then
-  log "backend main ${backend_sha:0:8}: no backend change since the last sync"
+last_mcp_sha=""
+if [ -r "$LAST_MCP_SHA_FILE" ]; then
+  last_mcp_sha="$(cat "$LAST_MCP_SHA_FILE")"
+fi
+
+if [ "$backend_sha" = "$last_sha" ] && [ "$mcp_sha" = "$last_mcp_sha" ] \
+  && [ -r "$LAST_BE_MANIFEST_FILE" ] && [ -r "$LAST_MCP_MANIFEST_FILE" ]; then
+  log "backend main ${backend_sha:0:8}: no backend change; MCP main ${mcp_sha:0:8}: no MCP change since the last sync"
   exit 0
 fi
 
@@ -693,35 +772,62 @@ fi
 # what the artifacts actually come from, so the branch name, the commit message
 # and the state file all name this sha, not the one resolved before the clone.
 backend_sha="$(git -C "$backend_clone" rev-parse HEAD)"
-if [ "$backend_sha" = "$last_sha" ]; then
-  log "backend main ${backend_sha:0:8}: no backend change since the last sync"
-  exit 0
+mcp_clone="$STATE_DIR/mcp-source"
+if ! clone_repo "$MCP_SOURCE_URL" "$MCP_SOURCE_BRANCH" "$mcp_clone"; then
+  log "ERROR cannot clone $MCP_SOURCE_URL"
+  exit 1
+fi
+mcp_sha="$(git -C "$mcp_clone" rev-parse HEAD)"
+# The docs registry reader uses origin/main internally; that ref must name the
+# exact selected MCP clone even when its configured source branch differs.
+git -C "$mcp_clone" update-ref refs/remotes/origin/main "$mcp_sha"
+
+watched_manifest "$backend_clone" "${WATCHED_PATHS[@]}" >"$MANIFEST_TMP_FILE"
+watched_manifest "$mcp_clone" "${MCP_WATCHED_PATHS[@]}" >"$MCP_MANIFEST_TMP_FILE"
+watched_count="$(awk 'END {print NR+0}' "$MANIFEST_TMP_FILE")"
+mcp_watched_count="$(awk 'END {print NR+0}' "$MCP_MANIFEST_TMP_FILE")"
+if [ "$mcp_watched_count" != "${#MCP_WATCHED_PATHS[@]}" ]; then
+  log "ERROR MCP source is missing a watched catalog record"
+  exit 1
 fi
 
-watched_manifest "$backend_clone" >"$MANIFEST_TMP_FILE"
-watched_count="$(awk 'END {print NR+0}' "$MANIFEST_TMP_FILE")"
-
+backend_changed=1
+mcp_changed=1
 if [ -n "$last_sha" ] && [ -r "$LAST_BE_MANIFEST_FILE" ] \
   && cmp -s "$MANIFEST_TMP_FILE" "$LAST_BE_MANIFEST_FILE"; then
-  # The backend moved but no watched artifact did: record the new sha so the
-  # next tick does not re-diff it, and touch no consumer.
-  log "backend main ${backend_sha:0:8}: $watched_count watched file(s), none changed since ${last_sha:0:8} — no consumer action"
-  record_state "$backend_sha" "$MANIFEST_TMP_FILE"
+  backend_changed=0
+fi
+if [ -n "$last_mcp_sha" ] && [ -r "$LAST_MCP_MANIFEST_FILE" ] \
+  && cmp -s "$MCP_MANIFEST_TMP_FILE" "$LAST_MCP_MANIFEST_FILE"; then
+  mcp_changed=0
+fi
+
+if [ "$backend_changed" = "0" ] && [ "$mcp_changed" = "0" ]; then
+  log "backend main ${backend_sha:0:8}, MCP main ${mcp_sha:0:8}: watched files unchanged — no consumer action"
+  record_sources "$backend_sha" "$mcp_sha"
   exit 0
 fi
 
 if [ -z "$last_sha" ]; then
   log "backend main ${backend_sha:0:8}: first run ($watched_count watched file(s)) — syncing every consumer"
-else
+elif [ "$backend_changed" = "1" ]; then
   log "backend change ${last_sha:0:8}..${backend_sha:0:8}: $watched_count watched file(s)"
+fi
+if [ "$mcp_changed" = "1" ]; then
+  log "MCP change ${last_mcp_sha:0:8}..${mcp_sha:0:8}: $mcp_watched_count watched catalog file(s)"
 fi
 
 failed=0
 handed_off=0
 retry=0
 for name in "${CONSUMERS[@]}"; do
+  # An MCP projection change does not alter the backend artifacts other
+  # consumers vendor. Public docs join both exact sources once (GEN-8246).
+  if [ "$backend_changed" = "0" ] && [ "$name" != "api-docs" ]; then
+    continue
+  fi
   rc=0
-  process_consumer "$name" "$backend_sha" "$backend_clone" || rc=$?
+  process_consumer "$name" "$backend_sha" "$backend_clone" "$mcp_sha" "$mcp_clone" || rc=$?
   case "$rc" in
     0) ;;
     10) handed_off=1 ;;
@@ -734,8 +840,10 @@ done
 # error leaves the state untouched so the next tick retries the same change
 # instead of silently dropping it.
 if [ "$failed" = "0" ] && [ "$retry" = "0" ]; then
-  record_state "$backend_sha" "$MANIFEST_TMP_FILE"
-  log "backend main ${backend_sha:0:8}: state advanced"
+  record_sources "$backend_sha" "$mcp_sha"
+  if [ "$DRY_RUN" != "1" ]; then
+    log "backend main ${backend_sha:0:8}, MCP main ${mcp_sha:0:8}: state advanced"
+  fi
 elif [ "$failed" = "0" ]; then
   log "backend main ${backend_sha:0:8}: a sync PR is still waiting on checks; state not advanced, the next tick re-checks it"
 else

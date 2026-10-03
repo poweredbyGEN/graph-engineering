@@ -1,4 +1,4 @@
-# contract-sync — propagate backend contracts without a ticket
+# contract-sync — propagate backend contracts and the public MCP projection
 
 gen-backend-v2 owns the generated contracts. Consumers vendor byte-identical copies or
 derive their own artifacts from them, and each consumer has a freshness gate that turns red
@@ -7,22 +7,28 @@ changes on `main`, it runs each consumer's own regeneration command and opens a 
 that produced a diff. Nobody files a ticket for a contract change, and nobody notices the
 red gate first.
 
+The MCP catalog's schema and contract records are a second watched source. An MCP-only
+change regenerates `api-docs`; a backend change retains every backend consumer. Public docs
+join both exact source clones in one PR (GEN-8246).
+
 It never edits a generated artifact by hand — the consumer's own generator produces the
 bytes — and it never merges a PR that is not green.
 
 ## What it does, per run
 
-1. Resolve `main` of `GEN/gen-backend-v2` (`git ls-remote`).
-2. Stop if that is the sha recorded in `/var/lib/contract-sync/last-be-sha`.
+1. Resolve the backend and MCP source branches (`git ls-remote`).
+2. Stop only if both SHAs match their successful-disposition checkpoints.
 3. Clone the backend shallow and hash every watched file:
    `docs/generated/**`, `config/creation_cards.yml`, `config/model_capabilities.yml`.
    The list of `<blob-sha> <path>` pairs is stored as
    `/var/lib/contract-sync/last-be-watched.tsv`.
-4. If the watched hashes are unchanged, record the new sha and stop — a commit that only
-   touched `app/` never clones a consumer.
+4. Clone MCP separately and hash `src/gen_mcp_server/contracts/catalog-record/`'s
+   `schema-paths.tsv` and `contract-paths.tsv`. Its SHA and manifest live in
+   `last-mcp-sha` and `last-mcp-watched.tsv`. If both watched manifests are unchanged,
+   record the new SHAs and stop — app code or README edits never clone a consumer.
 5. Otherwise, for each consumer: fresh shallow clone, run its regeneration command, and
    look at `git status`. No diff means nothing to do.
-6. On a diff: branch `auto/contract-sync-<be-sha8>`, commit
+6. On a diff: branch `auto/contract-sync-<be-sha8>` (api-docs appends `-<mcp-sha8>`), commit
    `chore: sync backend contracts to gen-backend-v2 <be-sha8>`, push, open a PR, poll the
    PR head's statuses, and merge once they are all success.
 7. Advance the state only after every consumer reached a terminal disposition.
@@ -36,7 +42,7 @@ One line per consumer goes to stdout, which the unit sends to journald.
 | `gen-mcp-server` | `scripts/refresh_contracts.py --backend-path <clone> --ref origin/main` inside `CONTRACT_SYNC_MCP_IMAGE` (default `python:3.12-bookworm`, which carries git); it re-vendors every artifact and moves the pins that must change with them (action-schema hash, catalog record, rc09 tool cards). A checkout without that script falls back to the bare `MCP_REGENERATE` vendor list | `src/gen_mcp_server/contracts/`, the `.source` sidecars, `tests/test_rc05_typed_actions.py`, `tests/fixtures/rc09_tool_cards.json` |
 | `gen-agentic` | copy from the backend clone, then `scripts/build_creation_card_artifact.py` inside the `gen-agentic-ci` image (`CONTRACT_SYNC_AGENTIC_IMAGE`) | `docs/generated/{vidsheet-operations-schema,vidsheet-semantic-draft-schema,user-job-enums}.json` → `src/gen/contracts/`, plus the embedded `packages/gen-mcp-server/…/creation-cards.json` |
 | `limitless-fe` | `node scripts/sync-vidsheet-contract.mjs` with `GEN_BACKEND_PATH=<clone>` (plain copy of the artifact if that script is gone) | `src/schema/vidsheets/contracts/…schema.json` + `.source.json` + `railsContract.generated.ts` |
-| `api-docs` | `node scripts/sync-from-backend.mjs --backend <clone>` | skipped with a log line while that script does not exist |
+| `api-docs` | offline `update-mcp-tools-snapshot.mjs --aliases-repo <mcp-clone> --ref <exact-sha>`; `sync-from-backend.mjs --backend <backend-clone> --mcp-repo <mcp-clone>`; `sync_mcp_surface.py --derive-servers --mcp-src <mcp-clone>` then its normal render | both OpenAPI copies, llms files, MCP snapshot/registry and the existing public surface; skipped while the backend-sync script does not exist |
 
 The gen-mcp-server list is the `MCP_REGENERATE` array at the top of the script. The other
 `vendor_*.py` scripts are deliberately absent: `vendor_publish_platforms.py` reads
@@ -46,6 +52,10 @@ cannot run them.
 `limitless-fe`'s generator stamps a fresh `vendoredAt` on every run. When the artifact bytes
 did not change there is nothing to ship, so those timestamp-only edits are reverted and the
 consumer reports "no diff" — otherwise every run would open a PR containing only a clock.
+The same rule reverts timestamp-only MCP snapshot changes. Tool registry and route rendering
+remain owned by api-docs generators; the bot does not create a competing docs or routing model.
+The surface generator derives hosts for its committed operation list and renders that list;
+adding new operations requires its own supported surface-generation input.
 
 ## Adding a consumer
 
@@ -73,8 +83,8 @@ sudo DRY_RUN=1 bash ops/contract-sync/contract-sync.sh
 ```
 
 `DRY_RUN=1` skips push, PR and merge and prints the planned branch, commit message, PR and
-merge for each consumer. It still clones, regenerates, diffs and advances the state file, so
-a dry run and a real run agree on what they would do.
+merge for each consumer. It still clones, regenerates and diffs, but preserves both durable
+source checkpoints. A later real tick therefore still performs the planned work.
 
 The offline test builds local bare repositories and runs the same code against them:
 

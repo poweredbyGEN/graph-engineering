@@ -8,6 +8,10 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- Contract sync watches the MCP schema and route contract records alongside backend
+  artifacts, pins both clones through the public-doc generators, and joins changes into one
+  docs PR. Dry runs preserve durable source checkpoints and suppress snapshot clock churn.
+
 - `ops/contract-sync/`: a systemd timer that detects a change to a gen-backend-v2 contract
   artifact (`docs/generated/**`, `config/creation_cards.yml`, `config/model_capabilities.yml`),
   runs each consumer repository's own regeneration command, and opens a PR only when that
