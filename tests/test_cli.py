@@ -361,32 +361,117 @@ def test_validate_reports_exact_schema_path_and_json_location(tmp_path: Path, ca
     malformed = tmp_path / "malformed.json"
     malformed.write_text('{"version":\n', encoding="utf-8")
     assert main(["validate", str(malformed), "--json"]) == 2
-    payload = _json_stdout(capsys)
-    assert "line 2, column 1" in payload["error"]["issues"][0]["path"]
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert json.loads(captured.out) == {
+        "ok": False,
+        "command": "validate",
+        "error": {
+            "code": "WORKFLOW_INVALID",
+            "message": "workflow validation failed",
+            "issues": [
+                {
+                    "code": "PARSE_ERROR",
+                    "message": "Expecting value",
+                    "path": "$ (line 2, column 1)",
+                }
+            ],
+        },
+    }
 
 
-def test_validate_deep_json_returns_structured_error_without_traceback(
-    tmp_path: Path, capsys
+@pytest.mark.parametrize("schema_depth", [0, 2_000], ids=["valid", "deep-2000"])
+def test_validate_parser_recursion_returns_structured_error_without_traceback(
+    tmp_path: Path, monkeypatch, capsys, schema_depth: int
 ):
     # intent: parser recursion is an operator-facing validation result, never a crash.
     value = _workflow()
+    if schema_depth:
+        value["nodes"][0]["outputs"]["result"]["schema"] = "__DEEP_SCHEMA__"
+    raw = json.dumps(value).replace(
+        '"__DEEP_SCHEMA__"', '{"items":' * schema_depth + "{}" + "}" * schema_depth
+    )
+    path = tmp_path / "parser-limit.json"
+    path.write_text(raw, encoding="utf-8")
+
+    def parser_recursion(raw_json: str) -> None:
+        assert raw_json == raw
+        raise RecursionError("parser nesting limit")
+
+    # GEN-8421: cli and this test share json; restore loads before reading the result.
+    with monkeypatch.context() as parser_patch:
+        parser_patch.setattr(cli.json, "loads", parser_recursion)
+        assert main(["validate", str(path), "--json"]) == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert json.loads(captured.out) == {
+        "ok": False,
+        "command": "validate",
+        "error": {
+            "code": "WORKFLOW_INVALID",
+            "message": "workflow validation failed",
+            "issues": [
+                {
+                    "code": "PARSE_RESOURCE_LIMIT",
+                    "message": "workflow JSON nesting exceeds the parser safety limit",
+                    "path": "$",
+                }
+            ],
+        },
+    }
+
+
+def test_validate_schema_depth_returns_structured_error_without_traceback(
+    tmp_path: Path, capsys
+):
+    # intent: parseable JSON still enforces the independent schema depth limit of 64.
+    value = _workflow()
     value["nodes"][0]["outputs"]["result"]["schema"] = "__DEEP_SCHEMA__"
     raw = json.dumps(value).replace(
-        '"__DEEP_SCHEMA__"', '{"items":' * 2_000 + "{}" + "}" * 2_000
+        '"__DEEP_SCHEMA__"', '{"items":' * 70 + "{}" + "}" * 70
     )
-    path = tmp_path / "deep.json"
+    path = tmp_path / "schema-limit.json"
     path.write_text(raw, encoding="utf-8")
 
     assert main(["validate", str(path), "--json"]) == 2
-    payload = _json_stdout(capsys)
-    assert payload["error"]["code"] == "WORKFLOW_INVALID"
-    assert payload["error"]["issues"] == [
-        {
-            "code": "SCHEMA_DEPTH_EXCEEDED",
-            "message": "resource nesting exceeds the limit of 64",
-            "path": "$.nodes[0].outputs.result.schema",
-        }
-    ]
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert json.loads(captured.out) == {
+        "ok": False,
+        "command": "validate",
+        "error": {
+            "code": "WORKFLOW_INVALID",
+            "message": "workflow validation failed",
+            "issues": [
+                {
+                    "code": "SCHEMA_DEPTH_EXCEEDED",
+                    "message": "resource nesting exceeds the limit of 64",
+                    "path": "$.nodes[0].outputs.result.schema",
+                }
+            ],
+        },
+    }
+
+
+def test_validate_permitted_nested_schema_returns_success(tmp_path: Path, capsys):
+    # intent: schema resource bounds admit a manageable nested schema unchanged.
+    value = _workflow()
+    schema: dict = {"type": "string"}
+    for _ in range(8):
+        schema = {"type": "array", "items": schema}
+    value["nodes"][0]["outputs"]["result"]["schema"] = schema
+    path = _write_workflow(tmp_path / "nested-schema.json", value)
+
+    assert main(["validate", str(path), "--json"]) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert json.loads(captured.out) == {
+        "ok": True,
+        "command": "validate",
+        "workflow_id": "cli_test",
+        "node_count": 1,
+    }
 
 
 def test_validate_reports_external_ref_hidden_under_unevaluated_items(
