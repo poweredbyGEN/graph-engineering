@@ -8,6 +8,9 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- Contract sync watches canonical Vidsheet skills and shared references in
+  gen-agentic, pins their source clone, and refreshes hosted MCP on skill-only changes.
+
 - Contract sync watches the MCP schema and route contract records alongside backend
   artifacts, pins both clones through the public-doc generators, and joins changes into one
   docs PR. Dry runs preserve durable source checkpoints and suppress snapshot clock churn.

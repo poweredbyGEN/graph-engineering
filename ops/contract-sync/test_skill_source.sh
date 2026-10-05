@@ -16,6 +16,9 @@ import sys
 source = Path(sys.argv[1]).read_text()
 head, run = source.split('# Run\n', 1)
 seams = '''
+# Source routing is isolated from transport and lock availability.
+curl() { echo 'FAIL: unexpected network request' >&2; return 1; }
+flock() { return 0; }
 remote_source_sha() {
   case "$1" in
     *gen-backend-v2*) printf '%040d' 1 ;;
