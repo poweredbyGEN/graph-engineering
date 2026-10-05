@@ -143,3 +143,14 @@ credential helper, not on the API token), `python3` with `PyYAML` (for
 
 The sync stops at the merge. gen-deployd deploys every consumer's main, including
 `gen-mcp-server` to staging and to production (`mcp.gen.pro`).
+
+### Canonical MCP skill content (GEN-8551)
+
+The bot also watches `gen-agentic/skills/vidsheet-mcp` and `skills/_shared`.
+A change in those trees refreshes only `gen-mcp-server`, through
+`refresh_contracts.py --agentic-path /skills-source --agentic-ref origin/main`.
+The source clone is pinned once per run and mounted read-only; the generator
+uses git objects and needs no network token inside the container. Other agent
+changes update source bookkeeping without regenerating consumers. Skill and
+backend revisions both identify the sync branch; source failures and pending
+checks retain the change for retry. `test_skill_source.sh` exercises this path.

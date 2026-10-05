@@ -34,6 +34,7 @@ CONSUMER_WORK="$WORK/consumer"
 MCP_BARE="$TEST_ROOT/$OWNER/gen-mcp-server.git"
 MCP_WORK="$WORK/mcp"
 MCP_RECORD="src/gen_mcp_server/contracts/catalog-record"
+export CONTRACT_SYNC_SKILLS_URL="$GIT_BASE/$OWNER/gen-agentic.git"
 export CONTRACT_SYNC_MCP_URL="$GIT_BASE/$OWNER/gen-mcp-server.git"
 OUT="$TEST_ROOT/sync-output.log"
 TOKEN_SENTINEL="contract-sync-test-token-value-that-must-never-be-printed"
@@ -117,6 +118,8 @@ checkpoint_fixture() {
   git -C "$MCP_WORK" rev-parse HEAD >"$STATE_DIR/last-mcp-sha"
   git -C "$MCP_WORK" ls-tree -r HEAD -- "$MCP_RECORD/schema-paths.tsv" \
     "$MCP_RECORD/contract-paths.tsv" | awk '{print $3 "\t" $4}' >"$STATE_DIR/last-mcp-watched.tsv"
+  git -C "$CONSUMER_WORK" rev-parse HEAD >"$STATE_DIR/last-skills-sha"
+  git -C "$CONSUMER_WORK" ls-tree -r HEAD -- skills/vidsheet-mcp skills/_shared | awk '{print $3 "\t" $4}' >"$STATE_DIR/last-skills-watched.tsv"
 }
 
 # -----------------------------------------------------------------------------
@@ -141,7 +144,9 @@ git -C "$BE_WORK" remote add origin "$BE_BARE"
 git -C "$BE_WORK" push -q -u origin main
 
 git init -q --initial-branch=main "$CONSUMER_WORK"
-mkdir -p "$CONSUMER_WORK/src/gen/contracts"
+mkdir -p "$CONSUMER_WORK/src/gen/contracts" "$CONSUMER_WORK/skills/vidsheet-mcp" "$CONSUMER_WORK/skills/_shared"
+printf '%s\n' '---' 'name: vidsheet-mcp' 'description: Fixture' '---' >"$CONSUMER_WORK/skills/vidsheet-mcp/SKILL.md"
+printf 'Fixture reference\n' >"$CONSUMER_WORK/skills/_shared/ref.md"
 cp "$BE_WORK/docs/generated/vidsheet-operations-schema.json" \
   "$CONSUMER_WORK/src/gen/contracts/vidsheet-operations-schema.json"
 cp "$BE_WORK/docs/generated/vidsheet-semantic-draft-schema.json" \

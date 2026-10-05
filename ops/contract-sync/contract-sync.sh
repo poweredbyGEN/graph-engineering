@@ -37,6 +37,8 @@ BACKEND_URL="${CONTRACT_SYNC_BACKEND_URL:-$GIT_BASE/$GITEA_OWNER/$BACKEND_REPO.g
 MCP_SOURCE_REPO="${CONTRACT_SYNC_MCP_REPO:-gen-mcp-server}"
 MCP_SOURCE_BRANCH="${CONTRACT_SYNC_MCP_BRANCH:-main}"
 MCP_SOURCE_URL="${CONTRACT_SYNC_MCP_URL:-$GIT_BASE/$GITEA_OWNER/$MCP_SOURCE_REPO.git}"
+SKILLS_SOURCE_URL="${CONTRACT_SYNC_SKILLS_URL:-$GIT_BASE/$GITEA_OWNER/gen-agentic.git}"
+SKILLS_SOURCE_BRANCH="main"
 DRY_RUN="${DRY_RUN:-0}"
 
 BRANCH_PREFIX="auto/contract-sync-"
@@ -44,6 +46,9 @@ LAST_BE_SHA_FILE="$STATE_DIR/last-be-sha"
 LAST_BE_MANIFEST_FILE="$STATE_DIR/last-be-watched.tsv"
 LAST_MCP_SHA_FILE="$STATE_DIR/last-mcp-sha"
 LAST_MCP_MANIFEST_FILE="$STATE_DIR/last-mcp-watched.tsv"
+LAST_SKILLS_SHA_FILE="$STATE_DIR/last-skills-sha"
+LAST_SKILLS_MANIFEST_FILE="$STATE_DIR/last-skills-watched.tsv"
+SKILLS_MANIFEST_TMP_FILE="$STATE_DIR/.skills-watched-manifest.new"
 LOCK_FILE="$STATE_DIR/lock"
 PRS_FILE="$STATE_DIR/.pulls.json"
 STATUS_TMP_FILE="$STATE_DIR/.pull-statuses.json"
@@ -76,6 +81,10 @@ MCP_WATCHED_PATHS=(
   "src/gen_mcp_server/contracts/catalog-record/schema-paths.tsv"
   "src/gen_mcp_server/contracts/catalog-record/contract-paths.tsv"
 )
+
+# Customer workflows come from gen-agentic, independently of backend schemas.
+# Watch canonical skill bytes, not unrelated agent code (GEN-8551).
+SKILLS_WATCHED_PATHS=("skills/vidsheet-mcp" "skills/_shared")
 
 # gen-mcp-server regeneration, in this order. These are the vendor_*.py scripts
 # whose upstream is gen-backend-v2: vendor_publish_platforms.py reads
@@ -299,7 +308,7 @@ record_state() { # <backend-sha> <manifest-file>
   mv -f "$LAST_BE_SHA_FILE.new" "$LAST_BE_SHA_FILE"
 }
 
-record_sources() { # <backend-sha> <mcp-sha>
+record_sources() { # <backend-sha> <mcp-sha> <skills-sha>
   # A plan cannot consume a change that a later real tick still owes (GEN-8246).
   if [ "$DRY_RUN" = "1" ]; then
     log "DRY_RUN: source state not advanced"
@@ -310,6 +319,10 @@ record_sources() { # <backend-sha> <mcp-sha>
   mv -f "$LAST_MCP_MANIFEST_FILE.new" "$LAST_MCP_MANIFEST_FILE"
   printf '%s\n' "$2" >"$LAST_MCP_SHA_FILE.new"
   mv -f "$LAST_MCP_SHA_FILE.new" "$LAST_MCP_SHA_FILE"
+  cp -f "$SKILLS_MANIFEST_TMP_FILE" "$LAST_SKILLS_MANIFEST_FILE.new"
+  mv -f "$LAST_SKILLS_MANIFEST_FILE.new" "$LAST_SKILLS_MANIFEST_FILE"
+  printf '%s\n' "$3" >"$LAST_SKILLS_SHA_FILE.new"
+  mv -f "$LAST_SKILLS_SHA_FILE.new" "$LAST_SKILLS_SHA_FILE"
 }
 
 # -----------------------------------------------------------------------------
@@ -322,17 +335,21 @@ record_sources() { # <backend-sha> <mcp-sha>
 # check its own status explicitly.
 
 regen_gen_mcp_server() { # <consumer-clone> <backend-clone>
-  local clone="$1" backend="$2" script
+  local clone="$1" backend="$2" skills="$3" script
   # scripts/refresh_contracts.py re-vendors AND moves the pins that must change
   # with the artifacts (action-schema hash, catalog record, rc09 tool cards).
   # Vendoring alone leaves the sync PR red (GEN-8145). The pins need the
   # package installed, so it runs in a Python image that also carries git.
   if [ -f "$clone/scripts/refresh_contracts.py" ]; then
     timeout "$REGEN_TIMEOUT" docker run --rm --cpus 2 \
-      -v "$clone":/w -v "$backend":/backend -w /w "$MCP_IMAGE" sh -c \
+      -v "$clone":/w -v "$backend":/backend -v "$skills":/skills-source:ro -w /w "$MCP_IMAGE" sh -c \
       'git config --global --add safe.directory "*" &&
         pip install -q -e . pytest >/dev/null 2>&1 &&
-        python scripts/refresh_contracts.py --backend-path /backend --ref "origin/$0"' \
+        if [ -f scripts/vendor_skills.py ]; then
+          python scripts/refresh_contracts.py --backend-path /backend --ref "origin/$0" --agentic-path /skills-source --agentic-ref origin/main
+        else
+          python scripts/refresh_contracts.py --backend-path /backend --ref "origin/$0"
+        fi' \
       "$BACKEND_BRANCH" || return $?
     return 0
   fi
@@ -590,6 +607,10 @@ process_consumer() { # <name> <backend-sha> <backend-clone> <mcp-sha> <mcp-clone
   local branch="$BRANCH_PREFIX${backend_sha:0:8}"
   local title="chore: sync backend contracts to gen-backend-v2 ${backend_sha:0:8}"
   local provenance_mcp=""
+  if [ "$name" = "gen-mcp-server" ]; then
+    branch="$branch-skills-${skills_sha:0:8}"
+    title="chore: sync backend ${backend_sha:0:8} and skills ${skills_sha:0:8}"
+  fi
   if [ "$name" = "api-docs" ]; then
     branch="$branch-${mcp_sha:0:8}"
     title="chore: sync API contracts from backend ${backend_sha:0:8} and MCP ${mcp_sha:0:8}"
@@ -607,7 +628,7 @@ process_consumer() { # <name> <backend-sha> <backend-clone> <mcp-sha> <mcp-clone
   }
 
   case "$name" in
-    gen-mcp-server) regen_gen_mcp_server "$clone" "$backend" || regen_rc=$? ;;
+    gen-mcp-server) regen_gen_mcp_server "$clone" "$backend" "$skills_clone" || regen_rc=$? ;;
     gen-agentic) regen_gen_agentic "$clone" "$backend" || regen_rc=$? ;;
     limitless-fe) regen_limitless_fe "$clone" "$backend" || regen_rc=$? ;;
     api-docs) regen_api_docs "$clone" "$backend" "$mcp" "$mcp_sha" || regen_rc=$? ;;
@@ -673,6 +694,9 @@ process_consumer() { # <name> <backend-sha> <backend-clone> <mcp-sha> <mcp-clone
     return 1
   }
   commit_message_file "$STATE_DIR/.commit-msg.$name" "$title" "$backend_sha" "$provenance_mcp" "${changed_paths[@]}"
+  if [ "$name" = "gen-mcp-server" ]; then
+    printf '\nCanonical skills from gen-agentic %s.\n' "$skills_sha" >>"$STATE_DIR/.commit-msg.$name"
+  fi
   git -C "$clone" -c user.name="$COMMIT_NAME" -c user.email="$COMMIT_EMAIL" \
     commit -q -F "$STATE_DIR/.commit-msg.$name" || {
     log "$name: ERROR cannot commit the regenerated files"
@@ -692,6 +716,9 @@ process_consumer() { # <name> <backend-sha> <backend-clone> <mcp-sha> <mcp-clone
   if [ -z "$pr_number" ]; then
     body="$(printf 'Synced from gen-backend-v2 %s.\n\nChanged paths:\n\n%s\n' \
       "$backend_sha" "${changed_paths[*]}")"
+    if [ "$name" = "gen-mcp-server" ]; then
+      body="$(printf '%s\n\nCanonical skills from gen-agentic %s.\n' "$body" "$skills_sha")"
+    fi
     if [ -n "$provenance_mcp" ]; then
       body="$(printf '%s\n\nPublic MCP projection from gen-mcp-server %s.\n' "$body" "$provenance_mcp")"
     fi
@@ -746,6 +773,16 @@ if [ -z "$mcp_sha" ]; then
   exit 1
 fi
 
+skills_sha="$(remote_source_sha "$SKILLS_SOURCE_URL" "$SKILLS_SOURCE_BRANCH" || true)"
+if [ -z "$skills_sha" ]; then
+  log "ERROR cannot resolve canonical skills source"
+  exit 1
+fi
+last_skills_sha=""
+if [ -r "$LAST_SKILLS_SHA_FILE" ]; then
+  last_skills_sha="$(cat "$LAST_SKILLS_SHA_FILE")"
+fi
+
 last_sha=""
 if [ -r "$LAST_BE_SHA_FILE" ]; then
   last_sha="$(cat "$LAST_BE_SHA_FILE")"
@@ -756,8 +793,8 @@ if [ -r "$LAST_MCP_SHA_FILE" ]; then
   last_mcp_sha="$(cat "$LAST_MCP_SHA_FILE")"
 fi
 
-if [ "$backend_sha" = "$last_sha" ] && [ "$mcp_sha" = "$last_mcp_sha" ] \
-  && [ -r "$LAST_BE_MANIFEST_FILE" ] && [ -r "$LAST_MCP_MANIFEST_FILE" ]; then
+if [ "$backend_sha" = "$last_sha" ] && [ "$mcp_sha" = "$last_mcp_sha" ] && [ "$skills_sha" = "$last_skills_sha" ] \
+  && [ -r "$LAST_BE_MANIFEST_FILE" ] && [ -r "$LAST_MCP_MANIFEST_FILE" ] && [ -r "$LAST_SKILLS_MANIFEST_FILE" ]; then
   log "backend main ${backend_sha:0:8}: no backend change; MCP main ${mcp_sha:0:8}: no MCP change since the last sync"
   exit 0
 fi
@@ -782,6 +819,19 @@ mcp_sha="$(git -C "$mcp_clone" rev-parse HEAD)"
 # exact selected MCP clone even when its configured source branch differs.
 git -C "$mcp_clone" update-ref refs/remotes/origin/main "$mcp_sha"
 
+skills_clone="$STATE_DIR/skills-source"
+if ! clone_repo "$SKILLS_SOURCE_URL" "$SKILLS_SOURCE_BRANCH" "$skills_clone"; then
+  log "ERROR cannot clone canonical skills source"
+  exit 1
+fi
+skills_sha="$(git -C "$skills_clone" rev-parse HEAD)"
+git -C "$skills_clone" update-ref refs/remotes/origin/main "$skills_sha"
+watched_manifest "$skills_clone" "${SKILLS_WATCHED_PATHS[@]}" >"$SKILLS_MANIFEST_TMP_FILE"
+if [ ! -s "$SKILLS_MANIFEST_TMP_FILE" ]; then
+  log "ERROR canonical skills tree is empty"
+  exit 1
+fi
+
 watched_manifest "$backend_clone" "${WATCHED_PATHS[@]}" >"$MANIFEST_TMP_FILE"
 watched_manifest "$mcp_clone" "${MCP_WATCHED_PATHS[@]}" >"$MCP_MANIFEST_TMP_FILE"
 watched_count="$(awk 'END {print NR+0}' "$MANIFEST_TMP_FILE")"
@@ -793,6 +843,11 @@ fi
 
 backend_changed=1
 mcp_changed=1
+skills_changed=1
+if [ -n "$last_skills_sha" ] && [ -r "$LAST_SKILLS_MANIFEST_FILE" ] \
+  && cmp -s "$SKILLS_MANIFEST_TMP_FILE" "$LAST_SKILLS_MANIFEST_FILE"; then
+  skills_changed=0
+fi
 if [ -n "$last_sha" ] && [ -r "$LAST_BE_MANIFEST_FILE" ] \
   && cmp -s "$MANIFEST_TMP_FILE" "$LAST_BE_MANIFEST_FILE"; then
   backend_changed=0
@@ -802,9 +857,9 @@ if [ -n "$last_mcp_sha" ] && [ -r "$LAST_MCP_MANIFEST_FILE" ] \
   mcp_changed=0
 fi
 
-if [ "$backend_changed" = "0" ] && [ "$mcp_changed" = "0" ]; then
+if [ "$backend_changed" = "0" ] && [ "$mcp_changed" = "0" ] && [ "$skills_changed" = "0" ]; then
   log "backend main ${backend_sha:0:8}, MCP main ${mcp_sha:0:8}: watched files unchanged — no consumer action"
-  record_sources "$backend_sha" "$mcp_sha"
+  record_sources "$backend_sha" "$mcp_sha" "$skills_sha"
   exit 0
 fi
 
@@ -823,8 +878,14 @@ retry=0
 for name in "${CONSUMERS[@]}"; do
   # An MCP projection change does not alter the backend artifacts other
   # consumers vendor. Public docs join both exact sources once (GEN-8246).
-  if [ "$backend_changed" = "0" ] && [ "$name" != "api-docs" ]; then
-    continue
+  if [ "$backend_changed" = "0" ]; then
+    if [ "$name" = "gen-mcp-server" ] && [ "$skills_changed" = "1" ]; then
+      :
+    elif [ "$name" = "api-docs" ] && [ "$mcp_changed" = "1" ]; then
+      :
+    else
+      continue
+    fi
   fi
   rc=0
   process_consumer "$name" "$backend_sha" "$backend_clone" "$mcp_sha" "$mcp_clone" || rc=$?
@@ -840,7 +901,7 @@ done
 # error leaves the state untouched so the next tick retries the same change
 # instead of silently dropping it.
 if [ "$failed" = "0" ] && [ "$retry" = "0" ]; then
-  record_sources "$backend_sha" "$mcp_sha"
+  record_sources "$backend_sha" "$mcp_sha" "$skills_sha"
   if [ "$DRY_RUN" != "1" ]; then
     log "backend main ${backend_sha:0:8}, MCP main ${mcp_sha:0:8}: state advanced"
   fi
