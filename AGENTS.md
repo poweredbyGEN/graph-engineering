@@ -45,8 +45,12 @@ is not protection.
 Release-readiness probe and deterministic comparison tests live in
 `ops/release_readiness.py` and `tests/test_release_readiness.py`. See
 `docs/RELEASE_READINESS.md` for private inventory and read-only integration prerequisites.
+Sixteen focused QA checks cover comparison failures, missing configuration,
+sanitized HTTP refusals and live Rails process revision precedence.
 
 ## Lessons Learned
 
 Deploy dashboards and runtime provenance are independent evidence. Missing runtime
 SHAs, account permissions, or provider-free admission validation must fail readiness.
+Deploy targets must belong to the observed service's repository. An unperformed
+scoped read proves neither malformed UUIDs nor a broken QA account.

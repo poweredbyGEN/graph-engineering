@@ -9,7 +9,10 @@ paid data. Python 3.11, SSH access, and a pinned MCP source checkout are require
 Keep the inventory outside version control: hosts, account IDs and endpoint
 locations are site configuration. Tokens are read through named environment
 variables, never through command arguments. The JSON report contains only check
-results, error classes, runtime SHAs, and activity/import-error booleans.
+results, error classes, runtime SHAs, Rails process revision paths/PIDs, and
+activity/import-error booleans. Missing account/validation configuration reports
+each subcheck as unobserved; it is not an observation exception. HTTP refusals
+retain their status without exposing response bodies.
 
 The inventory has these keys:
 
@@ -21,9 +24,14 @@ The inventory has these keys:
   serving replica and worker as additional labels, using the same labels in both
   environments. Shared services can appear in both inventories. `{sha}` in a unit
   name expands to the deployd target's `last_deployed_sha`.
+  Rails must map to this Rails repository's environment target (for example,
+  `gbv2-production`/`gbv2-staging`), not another repository's deploy target.
 - `mcp`: `production` and `staging` settings, each with `url`, `token_env`,
   `documented_views`, optional existing `agent_id`, and optional `contract_endpoints`
   mapping every client name to its existing GET contract-version endpoint.
+  Saved-idea reads require both the existing agent scope and its bearer token.
+  An unperformed read is reported separately from malformed identifiers or an
+  empty saved-idea list. Served structured content takes precedence over prose.
 - `qa`: preferably the existing Rails `organizations_url`, a scoped
   `organization_id`, and `token_env`. An authenticated organization read proves
   the QA session, owner permission to create an agent, and `available_credit`.
@@ -44,8 +52,9 @@ red, including missing saved ideas, missing advertised contract versions on any
 client, or unobservable process provenance. GEN-9072 versions are optional only
 while no observed client advertises them.
 
-Runtime provenance comes from `/proc` environment, immutable interpreter deploy
-stamps, release `REVISION` files, or running cwd Git HEAD. Activity and the last
+Rails provenance comes from the `REVISION` files under live service-process cwds;
+conflicting process revisions fail closed. Other runtime provenance comes from
+`/proc` environment, immutable interpreter deploy stamps, or running cwd Git HEAD. Activity and the last
 100 journal lines from the previous 15 minutes prove startup smoke, not full
 application health. Warehouse checks verify configuration presence, not SQL
 connectivity or database grants. Renderer checks verify URL parity and a

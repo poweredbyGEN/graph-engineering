@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 import uuid
@@ -125,19 +126,30 @@ def compare(data):
     )
     surfaces = [data.get("surfaces", {}).get(k, {}) for k in ("production", "staging")]
     card_ok = uuid_ok = view_ok = True
-    for surface in surfaces:
+    uuid_details = []
+    for label, surface in zip(("production", "staging"), surfaces):
         cards, planner = surface.get("cards", []), surface.get("planner_types", [])
         mapped = {c.get("card_type") for c in cards if c.get("job_types")}
         mapped |= {j for c in cards for j in c.get("job_types", [])}
         card_ok &= bool(cards and planner and set(planner) <= mapped)
         ids = surface.get("idea_ids", [])
         valid = bool(ids)
+        invalid = 0
         for idea_id in ids:
             try:
-                valid &= str(uuid.UUID(str(idea_id))) == str(idea_id).lower()
+                invalid += str(uuid.UUID(str(idea_id))) != str(idea_id).lower()
             except (ValueError, TypeError, AttributeError):
-                valid = False
+                invalid += 1
+        valid &= not invalid
         uuid_ok &= valid
+        uuid_details.append(
+            f"{label}: {invalid} invalid identifier(s) in {len(ids)} saved ideas"
+            if invalid
+            else f"{label}: {len(ids)} saved UUID(s)"
+            if ids
+            else f"{label}: "
+            + surface.get("idea_observation", "no saved ideas observed")
+        )
         docs, served = (
             surface.get("documented_views", []),
             surface.get("served_views", []),
@@ -151,7 +163,7 @@ def compare(data):
     check(
         "saved idea UUID",
         uuid_ok,
-        "Existing saved ideas have UUID identifiers in both environments",
+        "; ".join(uuid_details),
     )
     check(
         "discover views",
@@ -182,33 +194,62 @@ def compare(data):
     )
     qa = data.get("qa", {})
     credits = qa.get("credits")
-    check(
-        "QA account",
-        qa.get("signin") is True
-        and qa.get("can_create_agent") is True
-        and qa.get("role") == "Owner"
-        and isinstance(credits, (int, float))
+    qa_checks = {
+        "signin": qa.get("signin") is True,
+        "owner": qa.get("role") == "Owner",
+        "create_permission": qa.get("can_create_agent") is True,
+        "credits": isinstance(credits, (int, float))
         and not isinstance(credits, bool)
         and math.isfinite(credits)
         and credits > 0,
-        "Authenticated staging QA account, Owner role, dry create permission, positive credits",
+    }
+    qa_fields = {
+        "signin": "signin",
+        "owner": "role",
+        "create_permission": "can_create_agent",
+        "credits": "credits",
+    }
+    check(
+        "QA account",
+        all(qa_checks.values()),
+        qa.get("observation", "HTTP account read succeeded")
+        + "; "
+        + ", ".join(
+            f"{name}={'PASS' if ok else 'FAIL' if qa_fields[name] in qa else 'unobserved'}"
+            for name, ok in qa_checks.items()
+        ),
     )
     collect = data.get("collect", {})
     code = collect.get("code", "")
     code = code if isinstance(code, str) else ""
     # Only an independently documented validation-only surface is safe: live
     # collect can bill before refusing. Missing validation fails closed (GEN-8926).
-    check(
-        "GEN-8926",
-        collect.get("dry_run") is True
-        and isinstance(collect.get("count"), int)
+    collect_checks = {
+        "dry_run": collect.get("dry_run") is True,
+        "above_cap": isinstance(collect.get("count"), int)
         and isinstance(collect.get("cap"), int)
-        and collect["count"] > collect["cap"] > 0
-        and code in collect.get("refusal_codes", [])
+        and not isinstance(collect["count"], bool)
+        and not isinstance(collect["cap"], bool)
+        and collect["count"] > collect["cap"] > 0,
+        "typed_refusal": code in collect.get("refusal_codes", [])
         and not any(
             word in code.upper() for word in ("PAYMENT", "FUNDING", "BUSY", "CREDIT")
         ),
-        "Above-cap count returns a typed validation refusal without paid collection",
+    }
+    collect_fields = {
+        "dry_run": "dry_run",
+        "above_cap": "count",
+        "typed_refusal": "code",
+    }
+    check(
+        "GEN-8926",
+        all(collect_checks.values()),
+        collect.get("observation", "HTTP validation read succeeded")
+        + "; "
+        + ", ".join(
+            f"{name}={'PASS' if ok else 'FAIL' if collect_fields[name] in collect else 'unobserved'}"
+            for name, ok in collect_checks.items()
+        ),
     )
     return rows
 
@@ -246,7 +287,7 @@ def project(e):
 out={}
 for unit in cfg:
  try:
-  name=unit['name'];e={};cwd='';sha=''
+  name=unit['name'];e={};cwd='';sha='';revisions=[]
   if unit.get('kind')=='docker':
    info=json.loads(run(['docker','inspect',name]))[0]
    e=dict(x.split('=',1) for x in info['Config'].get('Env',[]) if '=' in x)
@@ -269,6 +310,10 @@ for unit in cfg:
     try:
      pe=dict(x.split('=',1) for x in Path('/proc/'+p+'/environ').read_text().split('\0') if '=' in x)
      pc=os.readlink('/proc/'+p+'/cwd')
+     # Rails revision files belong to live process cwds, never a checkout or deploy dashboard.
+     revision=Path(pc)/'REVISION'
+     if unit['label']=='rails' and revision.is_file():
+      revisions.append({'pid':p,'cwd':pc,'revision':revision.read_text().strip()})
      if p==pid or 'REMOTION_RENDER_URL' in pe:
       e=pe;cwd=pc
     except OSError: pass
@@ -276,6 +321,9 @@ for unit in cfg:
    cmd=Path('/proc/'+pid+'/cmdline').read_text().split('\0') if active else []
    stamps.extend(Path(x).resolve().parent.parent/'DEPLOY_SHA' for x in cmd if x.startswith('/') and '/bin/' in x)
    sha=e.get('DEPLOY_SHA') or next((f.read_text().strip() for f in stamps if f.is_file()),'') or (run(['git','-C',cwd,'rev-parse','HEAD']) if cwd else '')
+   if unit['label']=='rails':
+    observed={p['revision'] for p in revisions}
+    sha=next(iter(observed)) if len(observed)==1 else 'mixed process revisions' if observed else ''
    if not sha and cwd:
     match=re.search(r'/([0-9a-f]{40})(?:/|$)',cwd)
     if match:sha=match.group(1)
@@ -287,6 +335,7 @@ for unit in cfg:
    logs_p=subprocess.run(['journalctl','-u',name,'--since','15 minutes ago','-n','100','--no-pager','-o','cat'],capture_output=True,text=True,timeout=15)
    logs=logs_p.stdout if logs_p.returncode==0 else None
   item={'active':active,'sha':sha,'import_errors':bool(re.search(r'ImportError|ModuleNotFoundError|cannot import name|LoadError',logs)) if logs is not None else None, 'environment':project(e),'deploy_target':unit['deploy_target']}
+  if unit['label']=='rails': item['process_revisions']=revisions
   if unit['label']=='agentic' and cwd:
    # The planner's deployed card contract is the input; MCP owns generation mappings (GEN-9073).
    options=Path(cwd)/'src/gen/contracts/creation-card-model-options.json'
@@ -384,6 +433,8 @@ def served_surface(config, units, transport):
         payload = result.get("structuredContent", {})
         if isinstance(payload.get("result"), str):
             return json.loads(payload["result"])
+        if payload:
+            return payload
         for item in result.get("content", []):
             if item.get("type") == "text":
                 return json.loads(item["text"])
@@ -404,14 +455,20 @@ def served_surface(config, units, transport):
             )
     except Exception:
         surface["cards"] = []
-    if config.get("agent_id"):
+    surface["idea_observation"] = "not requested: missing agent_id"
+    if config.get("agent_id") and not os.environ.get(config.get("token_env", "")):
+        surface["idea_observation"] = "not requested: missing scoped bearer token"
+    elif config.get("agent_id"):
         try:
             ideas = read("content", "ideas")
-            surface["idea_ids"] = [
-                i.get("id") or i.get("idea_id") for i in ideas.get("ideas", [])[:5]
-            ]
-        except Exception:
+            saved = ideas.get("ideas", [])
+            if isinstance(saved, dict):
+                saved = saved.get("ideas", [])
+            surface["idea_ids"] = [i.get("id") or i.get("idea_id") for i in saved[:5]]
+            surface["idea_observation"] = "read returned no saved ideas"
+        except Exception as exc:
             surface["idea_ids"] = []
+            surface["idea_observation"] = "read failed: " + type(exc).__name__
     for client, endpoint in config.get("contract_endpoints", {}).items():
         surface["versions"][client] = get_json(endpoint).get("contract_versions", {})
     advertised = info.get("serverInfo", {}).get("contract_versions") or info.get(
@@ -462,12 +519,22 @@ def collect(config):
     # Both optional surfaces must be existing GET-only validation/read APIs.
     # No write-capable MCP tool or POST /collect is ever called by this probe.
     for key in ("qa", "collect"):
+        settings = config.get(key, {})
+        data[key] = {
+            "observation": "not requested: missing QA account configuration"
+            if key == "qa"
+            else "not requested: missing validation-only endpoint"
+        }
+        if not settings:
+            continue
         try:
-            settings = config[key]
             if key == "qa" and settings.get("organizations_url"):
                 token = os.environ.get(settings.get("token_env", ""))
                 if not token or not settings.get("organization_id"):
-                    raise ValueError("Missing scoped QA identity")
+                    data[key]["observation"] = (
+                        "not requested: missing scoped QA token or organization_id"
+                    )
+                    continue
                 result = get_json(settings["organizations_url"], token)
                 organizations = (
                     result
@@ -475,10 +542,19 @@ def collect(config):
                     else result.get("organizations", [])
                 )
                 workspace = next(
-                    row
-                    for row in organizations
-                    if str(row.get("id")) == str(settings["organization_id"])
+                    (
+                        row
+                        for row in organizations
+                        if str(row.get("id")) == str(settings["organization_id"])
+                    ),
+                    None,
                 )
+                if workspace is None:
+                    data[key] = {
+                        "signin": True,
+                        "observation": "HTTP 200: scoped workspace absent from organizations",
+                    }
+                    continue
                 role = workspace.get("user_role")
                 credits = workspace.get("available_credit")
                 if isinstance(credits, str):
@@ -487,6 +563,7 @@ def collect(config):
                     except ValueError:
                         credits = None
                 data[key] = {
+                    "observation": "HTTP 200: scoped organization returned",
                     "signin": True,
                     "role": "Owner" if role == "owner" else role,
                     "can_create_agent": role == "owner",
@@ -494,7 +571,12 @@ def collect(config):
                 }
                 continue
             if key == "collect" and settings.get("validation_only") is not True:
-                raise ValueError("Unproven validation surface")
+                data[key]["observation"] = (
+                    "not requested: endpoint not proven validation-only"
+                )
+                continue
+            if not settings.get("read_url"):
+                continue
             result = get_json(
                 settings["read_url"], os.environ.get(settings.get("token_env", ""))
             )
@@ -504,10 +586,19 @@ def collect(config):
                 else ("count", "cap", "code", "dry_run")
             )
             data[key] = {field: result.get(field) for field in allowed}
+            data[key]["observation"] = (
+                "HTTP 200: projected account response"
+                if key == "qa"
+                else "HTTP 200: projected validation response"
+            )
             if key == "collect":
                 data[key]["refusal_codes"] = settings.get("refusal_codes", [])
+        except urllib.error.HTTPError as exc:
+            data[key] = {"observation": f"HTTP {exc.code}: read refused; body withheld"}
+            if key == "qa":
+                data[key]["signin"] = False
         except Exception as exc:
-            data[key] = {}
+            data[key] = {"observation": "read failed: " + type(exc).__name__}
             data["errors"].append(key + ": " + type(exc).__name__)
     return data
 
@@ -563,7 +654,11 @@ def main():
             "checks": rows,
             "units": {
                 e: {
-                    k: {f: v.get(f) for f in ("sha", "active", "import_errors")}
+                    k: {
+                        f: v.get(f)
+                        for f in ("sha", "active", "import_errors", "process_revisions")
+                        if f in v
+                    }
                     for k, v in data[e].items()
                 }
                 for e in ("production", "staging")

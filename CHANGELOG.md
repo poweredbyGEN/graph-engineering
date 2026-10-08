@@ -9,7 +9,9 @@ All notable changes to this project are recorded here. The format follows
 ### Added
 
 - Read-only release readiness command with runtime provenance, compatibility and
-  account/admission checks that fail when required evidence is missing.
+  account/admission checks that fail when required evidence is missing. Rails
+  provenance uses live process revision files; missing scoped reads and HTTP
+  refusals identify unobserved or failed subchecks without exposing bodies.
 
 - Contract sync watches the MCP schema and route contract records alongside backend
   artifacts, pins both clones through the public-doc generators, and joins changes into one
