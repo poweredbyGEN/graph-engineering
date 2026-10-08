@@ -191,6 +191,14 @@ make_snapshot "$TEST_ROOT/case18/peers.tsv" 4
 actual=$(compute "$TEST_ROOT/case18" 16 4 2048 workers "$TEST_ROOT/case18/peers.tsv" 1 runner-a)
 assert_equal 'running peer load is not counted twice' 4 "$actual"
 
+printf '19. A busy runner never sizes below the --min floor\n'
+# intent: under load the computed count fell to 1 and one shard ran the whole suite on one worker.
+ciw_compute() { printf '1\n'; }
+actual=$(ciw_main --cap 4 --shards 1 --memory-per-worker-mb 2048 --min 4 2>/dev/null)
+assert_equal 'busy runner keeps the previous fixed worker count' 4 "$actual"
+actual=$(ciw_main --cap 2 --shards 1 --memory-per-worker-mb 2048 --min 4 2>/dev/null)
+assert_equal 'the floor never exceeds the cap' 2 "$actual"
+
 if [ "$failures" -gt 0 ]; then
   printf '%s test assertion(s) failed\n' "$failures" >&2
   exit 1

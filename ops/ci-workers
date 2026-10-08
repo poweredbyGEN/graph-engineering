@@ -251,11 +251,12 @@ ciw_main() (
   shards=
   memory_per_worker_mb=
   mode=workers
+  minimum=1
   snapshot=${CI_WORKER_SNAPSHOT:-/ci-resources/workflows.tsv}
   plan=
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --cap|--shards|--memory-per-worker-mb|--mode|--snapshot|--plan)
+      --cap|--shards|--memory-per-worker-mb|--mode|--snapshot|--plan|--min)
         [ "$#" -ge 2 ] || { ciw_warn "missing value for $1"; exit 2; }
         option=$1
         value=$2
@@ -267,10 +268,11 @@ ciw_main() (
           --mode) mode=$value ;;
           --snapshot) snapshot=$value ;;
           --plan) plan=$value ;;
+          --min) minimum=$value ;;
         esac
         ;;
       -h|--help)
-        printf '%s\n' 'usage: ci-workers --cap N --shards N --memory-per-worker-mb N [--mode workers|shards] [--snapshot FILE] [--plan FILE]' >&2
+        printf '%s\n' 'usage: ci-workers --cap N --shards N --memory-per-worker-mb N [--min N] [--mode workers|shards] [--snapshot FILE] [--plan FILE]' >&2
         exit 0
         ;;
       *) ciw_warn "unknown argument: $1"; exit 2 ;;
@@ -282,6 +284,11 @@ ciw_main() (
   case "$mode" in workers|shards) ;; *) ciw_warn '--mode must be workers or shards'; exit 2 ;; esac
   result=$(ciw_compute /proc /sys/fs/cgroup "$cap" "$shards" "$memory_per_worker_mb" "$snapshot")
   ciw_positive_int "$result" || { ciw_warn 'calculation did not produce a positive worker count'; exit 1; }
+  ciw_positive_int "$minimum" || { ciw_warn '--min must be a positive integer'; exit 2; }
+  # The floor is the repo's previous fixed count: a busy runner queues work in
+  # Woodpecker slots instead of collapsing a suite onto one worker.
+  [ "$minimum" -le "$cap" ] || minimum=$cap
+  [ "$result" -ge "$minimum" ] || result=$minimum
   if [ "$mode" = shards ]; then
     [ -n "$plan" ] || { ciw_warn '--mode shards requires --plan'; exit 2; }
     ciw_plan "$plan" "$result" "$cap"
