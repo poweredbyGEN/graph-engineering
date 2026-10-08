@@ -1,0 +1,254 @@
+#!/bin/sh
+# Resource-aware worker and active-shard count for portable CI images.
+# A provided snapshot is data only: queue credentials never enter PR CI.
+
+ciw_warn() {
+  printf 'ci-workers: %s\n' "$*" >&2
+}
+
+ciw_positive_int() {
+  case "$1" in
+    ''|*[!0-9]*) return 1 ;;
+    *[1-9]*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+ciw_cpu_list_count() (
+  list=$1
+  awk -v list="$list" '
+    BEGIN {
+      total = 0
+      count = split(list, parts, ",")
+      for (i = 1; i <= count; i++) {
+        dash = index(parts[i], "-")
+        if (dash) {
+          first = substr(parts[i], 1, dash - 1)
+          last = substr(parts[i], dash + 1)
+          if (first ~ /^[0-9]+$/ && last ~ /^[0-9]+$/ && last >= first)
+            total += last - first + 1
+        } else if (parts[i] ~ /^[0-9]+$/) {
+          total++
+        }
+      }
+      if (total > 0) printf "%.0f\n", total
+    }
+  '
+)
+
+ciw_online_cpus() (
+  proc_root=$1
+  affinity=
+  if [ -r "$proc_root/self/status" ]; then
+    affinity=$(awk -F: '$1 ~ /^[[:space:]]*Cpus_allowed_list$/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$proc_root/self/status")
+  fi
+  if [ -n "$affinity" ]; then
+    count=$(ciw_cpu_list_count "$affinity")
+    if ciw_positive_int "$count"; then
+      printf '%s\n' "$count"
+      exit 0
+    fi
+  fi
+  if command -v nproc >/dev/null 2>&1; then
+    count=$(nproc 2>/dev/null || true)
+    if ciw_positive_int "$count"; then
+      printf '%s\n' "$count"
+      exit 0
+    fi
+  fi
+  printf '1\n'
+)
+
+ciw_cgroup_cpu_quota() (
+  cgroup_root=$1
+  for file in "$cgroup_root/cpu.max" "$cgroup_root/cpu/cpu.max"; do
+    if [ -r "$file" ]; then
+      quota=$(awk '
+        NR == 1 {
+          if ($1 == "max" || $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ || $2 == 0) exit
+          printf "%.6f\n", $1 / $2
+        }
+      ' "$file")
+      if [ -n "$quota" ]; then
+        printf '%s\n' "$quota"
+        exit 0
+      fi
+    fi
+  done
+  for directory in "$cgroup_root" "$cgroup_root/cpu" "$cgroup_root/cpu,cpuacct"; do
+    quota_file="$directory/cpu.cfs_quota_us"
+    period_file="$directory/cpu.cfs_period_us"
+    if [ -r "$quota_file" ] && [ -r "$period_file" ]; then
+      quota=$(awk 'NR == 1 { print $1 }' "$quota_file")
+      period=$(awk 'NR == 1 { print $1 }' "$period_file")
+      case "$quota:$period" in
+        *[!0-9:]*|:*|*:) continue ;;
+      esac
+      if [ "$quota" -ge 0 ] 2>/dev/null && [ "$period" -gt 0 ] 2>/dev/null; then
+        awk -v quota="$quota" -v period="$period" 'BEGIN { printf "%.6f\n", quota / period }'
+        exit 0
+      fi
+    fi
+  done
+)
+
+ciw_cgroup_memory_mb() (
+  cgroup_root=$1
+  for directory in "$cgroup_root" "$cgroup_root/memory"; do
+    for pair in 'memory.max memory.current' 'memory.limit_in_bytes memory.usage_in_bytes'; do
+      set -- $pair
+      limit_file="$directory/$1"
+      current_file="$directory/$2"
+      if [ -r "$limit_file" ] && [ -r "$current_file" ]; then
+        remaining=$(awk '
+          NR == 1 { limit = $1; next }
+          NR == 2 { current = $1 }
+          END {
+            if (limit == "max" || limit !~ /^[0-9]+$/ || current !~ /^[0-9]+$/ || limit + 0 >= 1000000000000000) exit
+            remaining = limit - current
+            if (remaining < 0) remaining = 0
+            printf "%d\n", int(remaining / 1048576)
+          }
+        ' "$limit_file" "$current_file")
+        if [ -n "$remaining" ]; then
+          printf '%s\n' "$remaining"
+          exit 0
+        fi
+      fi
+    done
+  done
+)
+
+ciw_host_memory_mb() (
+  proc_root=$1
+  if [ -r "$proc_root/meminfo" ]; then
+    awk '
+      $1 == "MemAvailable:" { available = $2; found = 1 }
+      $1 == "MemFree:" { free = $2 }
+      $1 == "Buffers:" { buffers = $2 }
+      $1 == "Cached:" { cached = $2 }
+      END {
+        if (found) printf "%d\n", int(available / 1024)
+        else if (free + buffers + cached > 0) printf "%d\n", int((free + buffers + cached) / 1024)
+      }
+    ' "$proc_root/meminfo"
+  fi
+)
+
+# Snapshot rows are agent_id, host, active_workflows; counts include this build.
+ciw_snapshot_workflows() (
+  snapshot=$1
+  agent_ids=$2
+  system_host=$3
+  [ -n "$snapshot" ] && [ -r "$snapshot" ] || exit 0
+  awk -v agent_ids="$agent_ids" -v system_host="$system_host" '
+    BEGIN {
+      gsub(/[[:space:]]/, "", agent_ids)
+      id_count = split(agent_ids, ids, ",")
+      for (i = 1; i <= id_count; i++) if (ids[i] != "") selected[ids[i]] = 1
+    }
+    NR > 1024 { invalid = 1; exit }
+    /^[[:space:]]*#/ || NF == 0 || $1 == "agent_id" { next }
+    {
+      if (NF != 3 || $1 !~ /^[[:alnum:]_.-]+$/ || $3 !~ /^[0-9]+$/ || $3 + 0 > 1000000) {
+        invalid = 1
+        next
+      }
+      matches = (agent_ids != "" && ($1 in selected)) || (agent_ids == "" && system_host != "" && $2 == system_host)
+      if (matches) {
+        total += $3
+        matched++
+      }
+    }
+    END {
+      if (!invalid && matched > 0 && total > 0) printf "%.0f\n", total
+    }
+  ' "$snapshot"
+)
+
+# A shard slot uses the same resource budget as one worker slot.
+ciw_compute() (
+  proc_root=$1
+  cgroup_root=$2
+  cap=$3
+  shards=$4
+  memory_per_worker_mb=$5
+  snapshot=$6
+
+  online_cpus=$(ciw_online_cpus "$proc_root")
+  quota_cpus=$(ciw_cgroup_cpu_quota "$cgroup_root")
+  effective_cpus=$(awk -v online="$online_cpus" -v quota="$quota_cpus" 'BEGIN { cpus = online + 0; if (quota != "" && quota + 0 < cpus) cpus = quota + 0; printf "%.6f\n", cpus }')
+  load_1m=
+  if [ -r "$proc_root/loadavg" ]; then
+    load_1m=$(awk 'NR == 1 { print $1; exit }' "$proc_root/loadavg")
+  fi
+  case "$load_1m" in
+    ''|*[!0-9.]*|*.*.*|.*|*.)
+      ciw_warn '1-minute load is unavailable; limiting CPU budget to one slot'
+      load_1m=$(awk -v cpus="$effective_cpus" 'BEGIN { busy = cpus - 1; if (busy < 0) busy = 0; printf "%.6f\n", busy }')
+      ;;
+  esac
+  cpu_slots=$(awk -v cpus="$effective_cpus" -v busy="$load_1m" 'BEGIN { slots = int(cpus - busy); if (slots < 1) slots = 1; printf "%d\n", slots }')
+
+  host_memory_mb=$(ciw_host_memory_mb "$proc_root")
+  cgroup_memory_mb=$(ciw_cgroup_memory_mb "$cgroup_root")
+  available_memory_mb=$(awk -v host="$host_memory_mb" -v cgroup="$cgroup_memory_mb" 'BEGIN { memory = host + 0; if (cgroup != "" && cgroup + 0 < memory) memory = cgroup + 0; if (memory < 0) memory = 0; printf "%.0f\n", memory }')
+  memory_slots=$(awk -v memory="$available_memory_mb" -v per_worker="$memory_per_worker_mb" 'BEGIN { slots = int((memory + 0) / (per_worker + 0)); if (slots < 0) slots = 0; printf "%d\n", slots }')
+
+  active_workflows=$(ciw_snapshot_workflows "$snapshot" "${CI_WORKER_AGENT_IDS-}" "${CI_SYSTEM_HOST-}")
+  if ! ciw_positive_int "$active_workflows"; then
+    active_workflows=$shards
+    ciw_warn "no valid matching peer snapshot; using --shards=$shards as the workflow-count fallback"
+  fi
+  result=$(awk -v cap="$cap" -v cpu="$cpu_slots" -v memory="$memory_slots" -v active="$active_workflows" 'BEGIN {
+    cpu_per_workflow = int((cpu + 0) / (active + 0))
+    memory_per_workflow = int((memory + 0) / (active + 0))
+    result = cpu_per_workflow < memory_per_workflow ? cpu_per_workflow : memory_per_workflow
+    if (result > cap) result = cap
+    if (result < 1) result = 1
+    printf "%d\n", result
+  }')
+  printf '%s\n' "$result"
+)
+
+ciw_main() (
+  cap=
+  shards=
+  memory_per_worker_mb=
+  mode=workers
+  snapshot=
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --cap|--shards|--memory-per-worker-mb|--mode|--snapshot)
+        [ "$#" -ge 2 ] || { ciw_warn "missing value for $1"; exit 2; }
+        option=$1
+        value=$2
+        shift 2
+        case "$option" in
+          --cap) cap=$value ;;
+          --shards) shards=$value ;;
+          --memory-per-worker-mb) memory_per_worker_mb=$value ;;
+          --mode) mode=$value ;;
+          --snapshot) snapshot=$value ;;
+        esac
+        ;;
+      -h|--help)
+        printf '%s\n' 'usage: ci-workers --cap N --shards N --memory-per-worker-mb N [--mode workers|shards] [--snapshot FILE]' >&2
+        exit 0
+        ;;
+      *) ciw_warn "unknown argument: $1"; exit 2 ;;
+    esac
+  done
+  ciw_positive_int "$cap" || { ciw_warn '--cap must be a positive integer'; exit 2; }
+  ciw_positive_int "$shards" || { ciw_warn '--shards must be a positive integer'; exit 2; }
+  ciw_positive_int "$memory_per_worker_mb" || { ciw_warn '--memory-per-worker-mb must be a positive integer'; exit 2; }
+  case "$mode" in workers|shards) ;; *) ciw_warn '--mode must be workers or shards'; exit 2 ;; esac
+  result=$(ciw_compute /proc /sys/fs/cgroup "$cap" "$shards" "$memory_per_worker_mb" "$snapshot")
+  ciw_positive_int "$result" || { ciw_warn 'calculation did not produce a positive worker count'; exit 1; }
+  printf '%s\n' "$result"
+)
+
+# Sourcing defines the calculation functions; invoking ci-workers runs the CLI.
+if [ "${0##*/}" = 'ci-workers' ]; then
+  ciw_main "$@"
+fi

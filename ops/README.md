@@ -11,6 +11,12 @@ happening**.
 | [`contract-sync/`](contract-sync) | A backend contract change that reaches the consumers only when someone notices a red freshness gate. |
 | [`check-docs-accurate.py`](check-docs-accurate.py) | Documentation that describes code it no longer matches. |
 
+## ci-workers
+
+`ops/ci-workers --cap N --shards N --memory-per-worker-mb N [--mode workers|shards] [--snapshot FILE]` writes exactly one positive count to stdout. It bounds concurrency by CPU affinity/cgroup quota minus 1-minute host load, and by the minimum of host available memory and cgroup remaining memory. Memory sizes use MiB (1,024² bytes).
+
+An optional read-only snapshot uses TSV rows `agent_id<TAB>host<TAB>active_workflows` (counts include the current workflow). The helper selects rows for comma-separated `CI_WORKER_AGENT_IDS`, or exact `CI_SYSTEM_HOST` when no agent IDs are supplied. A missing, malformed, or unmatched snapshot falls back to `--shards` as the workflow-count estimate. The helper does not call the admin-only queue endpoint or read a Woodpecker token; CI configuration owns access to any existing snapshot source. In `shards` mode, consumers keep static workflow steps and deterministically redistribute selection across the returned active shard count.
+
 ## check-docs-accurate.py
 
 ```bash

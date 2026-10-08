@@ -8,6 +8,8 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- Add `ops/ci-workers`, a POSIX shell + awk helper that selects bounded worker or active-shard counts from CPU, memory and load without adding dependencies; it can use a read-only peer snapshot and falls back to the configured shard count.
+
 - Contract sync watches the MCP schema and route contract records alongside backend
   artifacts, pins both clones through the public-doc generators, and joins changes into one
   docs PR. Dry runs preserve durable source checkpoints and suppress snapshot clock churn.
