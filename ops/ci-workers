@@ -198,6 +198,9 @@ ciw_compute() (
   if ! ciw_positive_int "$active_workflows"; then
     active_workflows=$shards
     ciw_warn "no valid matching peer snapshot; using --shards=$shards as the workflow-count fallback"
+  elif [ "$active_workflows" -lt "$shards" ]; then
+    # Queue snapshots can lag sibling startup; reserve the frozen active set.
+    active_workflows=$shards
   fi
   # Host capacity is shared; the container quota and memory limit are already private.
   result=$(awk -v quota="$quota_cpus" -v cgroup_memory="$cgroup_memory_mb" -v per_worker="$memory_per_worker_mb" -v cap="$cap" -v cpu="$cpu_slots" -v memory="$memory_slots" -v active="$active_workflows" 'BEGIN {

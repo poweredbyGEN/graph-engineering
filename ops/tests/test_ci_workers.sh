@@ -55,25 +55,25 @@ compute() (
 printf '1. Idle 16 CPUs, 40 GB available, one active workflow -> cap 16\n'
 make_fixture "$TEST_ROOT/case1" 16 0 40960 'max 100000' max 0
 make_snapshot "$TEST_ROOT/case1/peers.tsv" 1
-actual=$(compute "$TEST_ROOT/case1" 16 4 2048 workers "$TEST_ROOT/case1/peers.tsv" 1 runner-a)
+actual=$(compute "$TEST_ROOT/case1" 16 1 2048 workers "$TEST_ROOT/case1/peers.tsv" 1 runner-a)
 assert_equal 'idle capacity reaches cap' 16 "$actual"
 
 printf '2. 16 CPUs with 1-minute load 12 -> 4\n'
 make_fixture "$TEST_ROOT/case2" 16 12 40960 'max 100000' max 0
 make_snapshot "$TEST_ROOT/case2/peers.tsv" 1
-actual=$(compute "$TEST_ROOT/case2" 16 4 2048 workers "$TEST_ROOT/case2/peers.tsv" 1 runner-a)
+actual=$(compute "$TEST_ROOT/case2" 16 1 2048 workers "$TEST_ROOT/case2/peers.tsv" 1 runner-a)
 assert_equal 'load reduces CPU budget' 4 "$actual"
 
 printf '3. cgroup v2 quota 200000/100000 -> 2\n'
 make_fixture "$TEST_ROOT/case3" 16 0 40960 '200000 100000' max 0
 make_snapshot "$TEST_ROOT/case3/peers.tsv" 1
-actual=$(compute "$TEST_ROOT/case3" 16 4 2048 workers "$TEST_ROOT/case3/peers.tsv" 1 runner-a)
+actual=$(compute "$TEST_ROOT/case3" 16 1 2048 workers "$TEST_ROOT/case3/peers.tsv" 1 runner-a)
 assert_equal 'v2 quota limits workers' 2 "$actual"
 
 printf '4. 3 GB cgroup memory remaining at 2 GB per worker -> 1\n'
 make_fixture "$TEST_ROOT/case4" 16 0 40960 'max 100000' 3221225472 0
 make_snapshot "$TEST_ROOT/case4/peers.tsv" 1
-actual=$(compute "$TEST_ROOT/case4" 16 4 2048 workers "$TEST_ROOT/case4/peers.tsv" 1 runner-a)
+actual=$(compute "$TEST_ROOT/case4" 16 1 2048 workers "$TEST_ROOT/case4/peers.tsv" 1 runner-a)
 assert_equal 'cgroup memory is tighter than host memory' 1 "$actual"
 
 printf '5. Eight active workflows on 16 CPUs -> 2; ignore other agent\n'
@@ -85,7 +85,7 @@ assert_equal 'peer count divides shared capacity' 2 "$actual"
 printf '6. One active workflow can exceed a fixed four-shard baseline\n'
 make_fixture "$TEST_ROOT/case6" 16 0 40960 'max 100000' max 0
 make_snapshot "$TEST_ROOT/case6/peers.tsv" 1
-actual=$(compute "$TEST_ROOT/case6" 16 4 2048 shards "$TEST_ROOT/case6/peers.tsv" 1 runner-a)
+actual=$(compute "$TEST_ROOT/case6" 16 1 2048 shards "$TEST_ROOT/case6/peers.tsv" 1 runner-a)
 if [ "$actual" -gt 4 ]; then pass 'active snapshot allows scale above four'; else fail "active snapshot did not scale above four (got $actual)"; fi
 
 printf '7. Zero/negative remaining capacity still returns one\n'
@@ -115,9 +115,9 @@ unset WOODPECKER_TOKEN
 printf '10. Shard mode is deterministic and stays in [1, cap]\n'
 make_fixture "$TEST_ROOT/case10" 16 0 40960 'max 100000' max 0
 make_snapshot "$TEST_ROOT/case10/peers.tsv" 1
-first=$(compute "$TEST_ROOT/case10" 7 4 2048 shards "$TEST_ROOT/case10/peers.tsv" 1 runner-a)
-second=$(compute "$TEST_ROOT/case10" 7 4 2048 shards "$TEST_ROOT/case10/peers.tsv" 1 runner-a)
-host_count=$(compute "$TEST_ROOT/case10" 7 4 2048 shards "$TEST_ROOT/case10/peers.tsv" '' runner-a)
+first=$(compute "$TEST_ROOT/case10" 7 1 2048 shards "$TEST_ROOT/case10/peers.tsv" 1 runner-a)
+second=$(compute "$TEST_ROOT/case10" 7 1 2048 shards "$TEST_ROOT/case10/peers.tsv" 1 runner-a)
+host_count=$(compute "$TEST_ROOT/case10" 7 1 2048 shards "$TEST_ROOT/case10/peers.tsv" '' runner-a)
 assert_equal 'repeated shard count is deterministic' "$first" "$second"
 assert_equal 'CI_SYSTEM_HOST selects the matching runner' "$first" "$host_count"
 if [ "$first" -ge 1 ] && [ "$first" -le 7 ]; then pass 'shard count is bounded by cap'; else fail "shard count is out of range (got $first)"; fi
@@ -131,7 +131,7 @@ mkdir -p "$TEST_ROOT/case11/cgroup/cpu"
 printf '150000\n' >"$TEST_ROOT/case11/cgroup/cpu/cpu.cfs_quota_us"
 printf '100000\n' >"$TEST_ROOT/case11/cgroup/cpu/cpu.cfs_period_us"
 make_snapshot "$TEST_ROOT/case11/peers.tsv" 1
-actual=$(compute "$TEST_ROOT/case11" 16 4 2048 workers "$TEST_ROOT/case11/peers.tsv" 1 runner-a)
+actual=$(compute "$TEST_ROOT/case11" 16 1 2048 workers "$TEST_ROOT/case11/peers.tsv" 1 runner-a)
 assert_equal 'v1 fractional quota is floored safely' 1 "$actual"
 
 printf '12. nproc fallback is used when affinity is unavailable\n'
@@ -141,13 +141,13 @@ mkdir -p "$TEST_ROOT/case12/bin"
 printf '#!/bin/sh\nprintf "6\\n"\n' >"$TEST_ROOT/case12/bin/nproc"
 chmod +x "$TEST_ROOT/case12/bin/nproc"
 make_snapshot "$TEST_ROOT/case12/peers.tsv" 1
-actual=$(compute "$TEST_ROOT/case12" 16 4 2048 workers "$TEST_ROOT/case12/peers.tsv" 1 runner-a)
+actual=$(compute "$TEST_ROOT/case12" 16 1 2048 workers "$TEST_ROOT/case12/peers.tsv" 1 runner-a)
 assert_equal 'nproc provides the allowed CPU count' 6 "$actual"
 
 printf '13. Malformed load data fails safe to one worker\n'
 make_fixture "$TEST_ROOT/case13" 16 . 40960 'max 100000' max 0
 make_snapshot "$TEST_ROOT/case13/peers.tsv" 1
-actual=$(compute "$TEST_ROOT/case13" 16 4 2048 workers "$TEST_ROOT/case13/peers.tsv" 1 runner-a)
+actual=$(compute "$TEST_ROOT/case13" 16 1 2048 workers "$TEST_ROOT/case13/peers.tsv" 1 runner-a)
 assert_equal 'malformed load cannot increase concurrency' 1 "$actual"
 
 printf '14. Private quota and memory are not divided by workflow peers twice\n'
@@ -173,9 +173,17 @@ wait "$pid_b"
 assert_equal 'concurrent workflows agree' "$(cat "$TEST_ROOT/race-a")" "$(cat "$TEST_ROOT/race-b")"
 printf '99\n' > "$TEST_ROOT/invalid-plan"
 if ciw_plan "$TEST_ROOT/invalid-plan" 4 4 >/dev/null 2>&1; then fail 'invalid stored plan refused'; else pass 'invalid stored plan refused'; fi
-printf '# generated_at 1\n1\trunner-a\t1\n' > "$TEST_ROOT/case9/stale.tsv"
-actual=$(compute "$TEST_ROOT/case9" 16 4 2048 workers "$TEST_ROOT/case9/stale.tsv" 1 runner-a 2>/dev/null)
-assert_equal 'stale snapshot cannot over-allocate' 4 "$actual"
+printf '# generated_at 1\n1\trunner-a\t8\n' > "$TEST_ROOT/case9/stale.tsv"
+actual=$(compute "$TEST_ROOT/case9" 16 1 2048 workers "$TEST_ROOT/case9/stale.tsv" 1 runner-a 2>/dev/null)
+assert_equal 'expired snapshot uses the declared peer estimate' 16 "$actual"
+
+printf '17. A lagging queue snapshot reserves all frozen sibling shards\n'
+make_fixture "$TEST_ROOT/case17" 16 0 40960 'max 100000' max 0
+make_snapshot "$TEST_ROOT/case17/peers.tsv" 1
+actual=$(compute "$TEST_ROOT/case17" 16 4 2048 workers "$TEST_ROOT/case17/peers.tsv" 1 runner-a)
+assert_equal 'starting siblings cannot each allocate every host core' 4 "$actual"
+actual=$(compute "$TEST_ROOT/case17" 16 1 2048 workers "$TEST_ROOT/case17/peers.tsv" 1 runner-a)
+assert_equal 'a sole active shard can use every available core' 16 "$actual"
 
 if [ "$failures" -gt 0 ]; then
   printf '%s test assertion(s) failed\n' "$failures" >&2
