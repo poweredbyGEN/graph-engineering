@@ -13,7 +13,7 @@ happening**.
 
 ## ci-workers
 
-`ops/ci-workers --cap N --shards N --memory-per-worker-mb N` prints a positive worker count. It divides host CPU affinity minus 1-minute load and available host memory by active workflows, then applies the container's private CPU quota/memory limits and the cap. Memory uses MiB. Missing CPU/load/memory information clamps conservatively.
+`ops/ci-workers --cap N --shards N --memory-per-worker-mb N` prints a positive worker count. It shares host CPU affinity and available host memory across active workflows, caps CPU share by affinity minus 1-minute load (which already includes running peers), then applies the container's private CPU quota/memory limits and the cap. Memory uses MiB. Missing CPU/load/memory information clamps conservatively.
 
 `--mode shards --plan FILE` freezes the first count in a shared pipeline-specific file. All statically declared workflows read that count and redistribute the same selection; indexes above it skip tests. A finite lock wait fails closed. Keep the plan on the runner's shared `/woodpecker-cache`, scoped by repository, pipeline number and rerun, so independent workspaces agree. Nightly Rails timings retain their twelve artifact-producing shards.
 

@@ -185,6 +185,12 @@ assert_equal 'starting siblings cannot each allocate every host core' 4 "$actual
 actual=$(compute "$TEST_ROOT/case17" 16 1 2048 workers "$TEST_ROOT/case17/peers.tsv" 1 runner-a)
 assert_equal 'a sole active shard can use every available core' 16 "$actual"
 
+printf '18. A late fourth shard uses the four CPUs not occupied by its peers\n'
+make_fixture "$TEST_ROOT/case18" 16 12 40960 'max 100000' max 0
+make_snapshot "$TEST_ROOT/case18/peers.tsv" 4
+actual=$(compute "$TEST_ROOT/case18" 16 4 2048 workers "$TEST_ROOT/case18/peers.tsv" 1 runner-a)
+assert_equal 'running peer load is not counted twice' 4 "$actual"
+
 if [ "$failures" -gt 0 ]; then
   printf '%s test assertion(s) failed\n' "$failures" >&2
   exit 1

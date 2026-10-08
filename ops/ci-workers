@@ -203,8 +203,10 @@ ciw_compute() (
     active_workflows=$shards
   fi
   # Host capacity is shared; the container quota and memory limit are already private.
-  result=$(awk -v quota="$quota_cpus" -v cgroup_memory="$cgroup_memory_mb" -v per_worker="$memory_per_worker_mb" -v cap="$cap" -v cpu="$cpu_slots" -v memory="$memory_slots" -v active="$active_workflows" 'BEGIN {
-    cpu_per_workflow = int((cpu + 0) / (active + 0))
+  result=$(awk -v online="$online_cpus" -v quota="$quota_cpus" -v cgroup_memory="$cgroup_memory_mb" -v per_worker="$memory_per_worker_mb" -v cap="$cap" -v cpu="$cpu_slots" -v memory="$memory_slots" -v active="$active_workflows" 'BEGIN {
+    # Host load already includes running peers; do not divide free CPUs twice.
+    cpu_per_workflow = int((online + 0) / (active + 0))
+    if (cpu < cpu_per_workflow) cpu_per_workflow = cpu
     memory_per_workflow = int((memory + 0) / (active + 0))
     if (quota != "" && int(quota) < cpu_per_workflow) cpu_per_workflow = int(quota)
     if (cgroup_memory != "" && int(cgroup_memory / per_worker) < memory_per_workflow) memory_per_workflow = int(cgroup_memory / per_worker)
