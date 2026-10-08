@@ -41,7 +41,7 @@ make_fixture() {
 make_snapshot() {
   file=$1
   active=$2
-  printf '# ci-workers snapshot v1\nagent_id\thost\tactive_workflows\n1\trunner-a\t%s\n2\trunner-b\t100\n' "$active" >"$file"
+  printf '# generated_at %s\nagent_id\thost\tactive_workflows\n1\trunner-a\t%s\n2\trunner-b\t100\n' "$(date +%s)" "$active" >"$file"
 }
 
 compute() (
@@ -121,7 +121,7 @@ host_count=$(compute "$TEST_ROOT/case10" 7 4 2048 shards "$TEST_ROOT/case10/peer
 assert_equal 'repeated shard count is deterministic' "$first" "$second"
 assert_equal 'CI_SYSTEM_HOST selects the matching runner' "$first" "$host_count"
 if [ "$first" -ge 1 ] && [ "$first" -le 7 ]; then pass 'shard count is bounded by cap'; else fail "shard count is out of range (got $first)"; fi
-cli_output=$("$HELPER" --cap 1 --shards 1 --memory-per-worker-mb 1 --mode shards 2>/dev/null)
+cli_output=$("$HELPER" --cap 1 --shards 1 --memory-per-worker-mb 1 --mode shards --plan "$TEST_ROOT/cli-plan" 2>/dev/null)
 assert_equal 'standalone CLI emits one positive integer' 1 "$cli_output"
 
 printf '11. cgroup v1 fractional quota 150000/100000 -> 1\n'
@@ -149,6 +149,33 @@ make_fixture "$TEST_ROOT/case13" 16 . 40960 'max 100000' max 0
 make_snapshot "$TEST_ROOT/case13/peers.tsv" 1
 actual=$(compute "$TEST_ROOT/case13" 16 4 2048 workers "$TEST_ROOT/case13/peers.tsv" 1 runner-a)
 assert_equal 'malformed load cannot increase concurrency' 1 "$actual"
+
+printf '14. Private quota and memory are not divided by workflow peers twice\n'
+make_fixture "$TEST_ROOT/case14" 16 8 40960 '200000 100000' 6442450944 0
+make_snapshot "$TEST_ROOT/case14/peers.tsv" 2
+actual=$(compute "$TEST_ROOT/case14" 16 2 2048 workers "$TEST_ROOT/case14/peers.tsv" 1 runner-a)
+assert_equal 'host load is subtracted before applying the private quota' 2 "$actual"
+make_fixture "$TEST_ROOT/case15" 16 0 40960 'max 100000' 6442450944 0
+make_snapshot "$TEST_ROOT/case15/peers.tsv" 2
+actual=$(compute "$TEST_ROOT/case15" 16 2 2048 workers "$TEST_ROOT/case15/peers.tsv" 1 runner-a)
+assert_equal 'private remaining memory is not shared twice' 3 "$actual"
+
+printf '16. All workflows retain the first resource decision, including racing writers\n'
+ciw_plan "$TEST_ROOT/shared/plan" 4 4 > "$TEST_ROOT/first"
+ciw_plan "$TEST_ROOT/shared/plan" 1 4 > "$TEST_ROOT/second"
+assert_equal 'later probes cannot resize a running partition' 4 "$(cat "$TEST_ROOT/second")"
+ciw_plan "$TEST_ROOT/race/plan" 3 4 > "$TEST_ROOT/race-a" &
+pid_a=$!
+ciw_plan "$TEST_ROOT/race/plan" 2 4 > "$TEST_ROOT/race-b" &
+pid_b=$!
+wait "$pid_a"
+wait "$pid_b"
+assert_equal 'concurrent workflows agree' "$(cat "$TEST_ROOT/race-a")" "$(cat "$TEST_ROOT/race-b")"
+printf '99\n' > "$TEST_ROOT/invalid-plan"
+if ciw_plan "$TEST_ROOT/invalid-plan" 4 4 >/dev/null 2>&1; then fail 'invalid stored plan refused'; else pass 'invalid stored plan refused'; fi
+printf '# generated_at 1\n1\trunner-a\t1\n' > "$TEST_ROOT/case9/stale.tsv"
+actual=$(compute "$TEST_ROOT/case9" 16 4 2048 workers "$TEST_ROOT/case9/stale.tsv" 1 runner-a 2>/dev/null)
+assert_equal 'stale snapshot cannot over-allocate' 4 "$actual"
 
 if [ "$failures" -gt 0 ]; then
   printf '%s test assertion(s) failed\n' "$failures" >&2

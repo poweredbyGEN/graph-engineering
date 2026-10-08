@@ -39,3 +39,18 @@ later reader can tell whether the test still guards anything. Write it as a stan
 statement of what must hold, not as a note about the investigation. Sabotage-check
 the guard (break the fix, confirm the test fails, restore) — a test that cannot fail
 is not protection.
+
+## Progress — GEN-8751 resource-aware CI
+
+Local cx-cishard work introduces the shared agent-infra CPU/load/memory and
+workflow-count helper. Sharded consumers freeze one per-pipeline count in the
+shared QA cache; every selected test keeps one owner. Queue credentials stay
+on the host, and the optional counts directory mounts read-only into CI.
+Next: release owner publishes the infra pin before consumers, applies the
+prepared host snapshot rollout, and verifies exact-SHA release CI performance.
+No lane push, PR, CI, full suite, host configuration change or deployment.
+
+## Lessons Learned — GEN-8751
+
+Resource probes may resize workers, but independent shard-count probes lose
+coverage. Private cgroup limits must not be divided by workflow peers twice.

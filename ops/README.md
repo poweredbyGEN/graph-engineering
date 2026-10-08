@@ -13,9 +13,12 @@ happening**.
 
 ## ci-workers
 
-`ops/ci-workers --cap N --shards N --memory-per-worker-mb N [--mode workers|shards] [--snapshot FILE]` writes exactly one positive count to stdout. It bounds concurrency by CPU affinity/cgroup quota minus 1-minute host load, and by the minimum of host available memory and cgroup remaining memory. Memory sizes use MiB (1,024² bytes).
+`ops/ci-workers --cap N --shards N --memory-per-worker-mb N` prints a positive worker count. It divides host CPU affinity minus 1-minute load and available host memory by active workflows, then applies the container's private CPU quota/memory limits and the cap. Memory uses MiB. Missing CPU/load/memory information clamps conservatively.
 
-An optional read-only snapshot uses TSV rows `agent_id<TAB>host<TAB>active_workflows` (counts include the current workflow). The helper selects rows for comma-separated `CI_WORKER_AGENT_IDS`, or exact `CI_SYSTEM_HOST` when no agent IDs are supplied. A missing, malformed, or unmatched snapshot falls back to `--shards` as the workflow-count estimate. The helper does not call the admin-only queue endpoint or read a Woodpecker token; CI configuration owns access to any existing snapshot source. In `shards` mode, consumers keep static workflow steps and deterministically redistribute selection across the returned active shard count.
+`--mode shards --plan FILE` freezes the first count in a shared pipeline-specific file. All statically declared workflows read that count and redistribute the same selection; indexes above it skip tests. A finite lock wait fails closed. Keep the plan on the runner's shared `/woodpecker-cache`, scoped by repository, pipeline number and rerun, so independent workspaces agree. Nightly Rails timings retain their twelve artifact-producing shards.
+
+The optional read-only `/ci-resources/workflows.tsv` (or `CI_WORKER_SNAPSHOT`/`--snapshot`) has a `# generated_at UNIX_SECONDS` header and TSV rows `agent_id<TAB>host<TAB>active_workflows`. Counts include this workflow. `CI_WORKER_AGENT_IDS` selects rows; a stale (>60s), malformed or absent snapshot falls back to the declared `--shards`. CPU/load/memory remain dynamic in that fallback. CI never receives queue credentials. `ops/ci-workflow-snapshot.py` runs on the host with the existing admin credential and writes only counts for explicitly selected QA agent IDs. Mount its output directory read-only into CI before enabling it; see `docs/ci-resource-rollout.md`.
+
 
 ## check-docs-accurate.py
 
