@@ -45,8 +45,9 @@ is not protection.
 Release-readiness probe and deterministic comparison tests live in
 `ops/release_readiness.py` and `tests/test_release_readiness.py`. See
 `docs/RELEASE_READINESS.md` for private inventory and read-only integration prerequisites.
-Sixteen focused QA checks cover comparison failures, missing configuration,
-sanitized HTTP refusals and live Rails process revision precedence.
+Eighteen focused QA checks cover comparison failures, missing configuration,
+sanitized HTTP refusals, live Rails process revisions, private credential reads
+and distinct exit codes for unconfigured versus broken integrations.
 
 ## Lessons Learned
 

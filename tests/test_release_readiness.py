@@ -305,3 +305,58 @@ def test_rails_revision_is_read_from_live_process_cwd(tmp_path, monkeypatch, cap
     assert row["process_revisions"] == [
         {"pid": str(os.getpid()), "cwd": str(tmp_path), "revision": "a" * 40}
     ]
+
+
+def test_exit_codes_distinguish_unconfigured_and_broken(tmp_path, monkeypatch, capsys):
+    # intent: missing integration cannot masquerade as success or an observed regression.
+    m = load()
+    config, report = tmp_path / "inventory.json", tmp_path / "report.json"
+    config.write_text("{}")
+    monkeypatch.setattr(
+        sys, "argv", ["probe", "--config", str(config), "--report", str(report)]
+    )
+    for expected in (0, 2, 1):
+        data = healthy()
+        data["errors"] = []
+        if expected:
+            data["qa"] = {
+                "unconfigured": True,
+                "observation": "not requested: missing QA account configuration",
+            }
+            data["collect"] = {
+                "unconfigured": True,
+                "observation": "not requested: missing validation-only endpoint",
+            }
+            data["surfaces"]["production"].pop("idea_ids")
+            data["surfaces"]["production"]["idea_unconfigured"] = True
+        if expected == 1:
+            data["surfaces"]["staging"]["idea_ids"] = ["1"]
+        with patch.object(m, "collect", return_value=data):
+            assert m.main() == expected
+        output = capsys.readouterr().out
+        result = json.loads(report.read_text())
+        assert result["ok"] == (expected == 0)
+        if expected:
+            assert "| QA account | UNCONFIGURED |" in output
+            assert "| GEN-8926 | UNCONFIGURED |" in output
+        if expected == 1:
+            assert "| saved idea UUID | FAIL |" in output
+        elif expected == 2:
+            assert "| saved idea UUID | UNCONFIGURED |" in output
+
+
+def test_private_token_file_and_environment_precedence(tmp_path, monkeypatch):
+    # intent: private bearer files stay outside reports and explicit environment credentials win.
+    m = load()
+    p = tmp_path / "bearer.private"
+    p.write_text("file-secret-value\n")
+    settings = {"token_file": str(p), "token_env": "READINESS_TEST_TOKEN"}
+    monkeypatch.delenv("READINESS_TEST_TOKEN", raising=False)
+    assert m.bearer_token(settings) == "file-secret-value"
+    monkeypatch.setenv("READINESS_TEST_TOKEN", "env-secret-value")
+    assert m.bearer_token(settings) == "env-secret-value"
+    monkeypatch.delenv("READINESS_TEST_TOKEN")
+    p.write_text("")
+    assert m.bearer_token(settings) is None
+    p.unlink()
+    assert m.bearer_token(settings) is None

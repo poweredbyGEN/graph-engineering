@@ -46,8 +46,15 @@ def routable(value):
 def compare(data):
     rows = []
 
-    def check(name, ok, detail):
-        rows.append({"check": name, "ok": bool(ok), "detail": detail})
+    def check(name, ok, detail, unconfigured=False):
+        rows.append(
+            {
+                "check": name,
+                "ok": bool(ok),
+                "detail": detail,
+                "status": "PASS" if ok else "UNCONFIGURED" if unconfigured else "FAIL",
+            }
+        )
 
     prod, stage = (data.get(k, {}) for k in ("production", "staging"))
 
@@ -126,6 +133,7 @@ def compare(data):
     )
     surfaces = [data.get("surfaces", {}).get(k, {}) for k in ("production", "staging")]
     card_ok = uuid_ok = view_ok = True
+    uuid_broken = False
     uuid_details = []
     for label, surface in zip(("production", "staging"), surfaces):
         cards, planner = surface.get("cards", []), surface.get("planner_types", [])
@@ -142,6 +150,9 @@ def compare(data):
                 invalid += 1
         valid &= not invalid
         uuid_ok &= valid
+        uuid_broken |= bool(
+            invalid or (not ids and not surface.get("idea_unconfigured"))
+        )
         uuid_details.append(
             f"{label}: {invalid} invalid identifier(s) in {len(ids)} saved ideas"
             if invalid
@@ -164,6 +175,7 @@ def compare(data):
         "saved idea UUID",
         uuid_ok,
         "; ".join(uuid_details),
+        unconfigured=not uuid_broken,
     )
     check(
         "discover views",
@@ -218,6 +230,7 @@ def compare(data):
             f"{name}={'PASS' if ok else 'FAIL' if qa_fields[name] in qa else 'unobserved'}"
             for name, ok in qa_checks.items()
         ),
+        unconfigured=qa.get("unconfigured") is True,
     )
     collect = data.get("collect", {})
     code = collect.get("code", "")
@@ -250,6 +263,7 @@ def compare(data):
             f"{name}={'PASS' if ok else 'FAIL' if collect_fields[name] in collect else 'unobserved'}"
             for name, ok in collect_checks.items()
         ),
+        unconfigured=collect.get("unconfigured") is True,
     )
     return rows
 
@@ -371,11 +385,17 @@ def load_transport(source):
     return module
 
 
+def bearer_token(config):
+    token = os.environ.get(config.get("token_env", ""))
+    if not token and config.get("token_file"):
+        path = Path(config["token_file"])
+        token = path.read_text().strip() if path.is_file() else None
+    return token or None
+
+
 def served_surface(config, units, transport):
-    url, token = (
-        config["url"],
-        os.environ.get(config.get("token_env", ""), "deploy-probe"),
-    )
+    credential = bearer_token(config)
+    url, token = config["url"], credential or "deploy-probe"
     session = None
 
     def rpc(method, params):
@@ -422,7 +442,7 @@ def served_surface(config, units, transport):
                     "view": view,
                     **(
                         {"agent_id": config["agent_id"]}
-                        if config.get("agent_id")
+                        if domain == "content" and config.get("agent_id")
                         else {}
                     ),
                 },
@@ -456,9 +476,11 @@ def served_surface(config, units, transport):
     except Exception:
         surface["cards"] = []
     surface["idea_observation"] = "not requested: missing agent_id"
-    if config.get("agent_id") and not os.environ.get(config.get("token_env", "")):
+    surface["idea_unconfigured"] = True
+    if config.get("agent_id") and not credential:
         surface["idea_observation"] = "not requested: missing scoped bearer token"
     elif config.get("agent_id"):
+        surface["idea_unconfigured"] = False
         try:
             ideas = read("content", "ideas")
             saved = ideas.get("ideas", [])
@@ -521,15 +543,16 @@ def collect(config):
     for key in ("qa", "collect"):
         settings = config.get(key, {})
         data[key] = {
+            "unconfigured": True,
             "observation": "not requested: missing QA account configuration"
             if key == "qa"
-            else "not requested: missing validation-only endpoint"
+            else "not requested: missing validation-only endpoint",
         }
         if not settings:
             continue
         try:
             if key == "qa" and settings.get("organizations_url"):
-                token = os.environ.get(settings.get("token_env", ""))
+                token = bearer_token(settings)
                 if not token or not settings.get("organization_id"):
                     data[key]["observation"] = (
                         "not requested: missing scoped QA token or organization_id"
@@ -577,9 +600,7 @@ def collect(config):
                 continue
             if not settings.get("read_url"):
                 continue
-            result = get_json(
-                settings["read_url"], os.environ.get(settings.get("token_env", ""))
-            )
+            result = get_json(settings["read_url"], bearer_token(settings))
             allowed = (
                 ("signin", "can_create_agent", "credits", "role")
                 if key == "qa"
@@ -643,6 +664,7 @@ def main():
             {
                 "check": "observation errors",
                 "ok": not data["errors"],
+                "status": "FAIL" if data["errors"] else "PASS",
                 "detail": "; ".join(data["errors"]) or "None",
             }
         )
@@ -668,16 +690,30 @@ def main():
         report = {
             "ok": False,
             "checks": [
-                {"check": "configuration", "ok": False, "detail": type(exc).__name__}
+                {
+                    "check": "configuration",
+                    "ok": False,
+                    "status": "FAIL",
+                    "detail": type(exc).__name__,
+                }
             ],
         }
     args.report.write_text(json.dumps(report, indent=2) + "\n")
     print("| Check | Result | Evidence |\n|---|---|---|")
     for row in report["checks"]:
         print(
-            f"| {row['check']} | {'PASS' if row['ok'] else 'FAIL'} | {row['detail']} |"
+            f"| {row['check']} | {row.get('status', 'PASS' if row['ok'] else 'FAIL')} | {row['detail']} |"
         )
-    return 0 if report["ok"] else 1
+    if report["ok"]:
+        return 0
+    # Missing integration remains nonzero without claiming an observed break (GEN-9073).
+    return (
+        1
+        if any(
+            not r["ok"] and r.get("status") != "UNCONFIGURED" for r in report["checks"]
+        )
+        else 2
+    )
 
 
 if __name__ == "__main__":
