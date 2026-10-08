@@ -39,3 +39,14 @@ later reader can tell whether the test still guards anything. Write it as a stan
 statement of what must hold, not as a note about the investigation. Sabotage-check
 the guard (break the fix, confirm the test fails, restore) — a test that cannot fail
 is not protection.
+
+## Progress / Next steps
+
+Release-readiness probe and deterministic comparison tests live in
+`ops/release_readiness.py` and `tests/test_release_readiness.py`. See
+`docs/RELEASE_READINESS.md` for private inventory and read-only integration prerequisites.
+
+## Lessons Learned
+
+Deploy dashboards and runtime provenance are independent evidence. Missing runtime
+SHAs, account permissions, or provider-free admission validation must fail readiness.

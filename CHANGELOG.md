@@ -8,6 +8,9 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- Read-only release readiness command with runtime provenance, compatibility and
+  account/admission checks that fail when required evidence is missing.
+
 - Contract sync watches the MCP schema and route contract records alongside backend
   artifacts, pins both clones through the public-doc generators, and joins changes into one
   docs PR. Dry runs preserve durable source checkpoints and suppress snapshot clock churn.

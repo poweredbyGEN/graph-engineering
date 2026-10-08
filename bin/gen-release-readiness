@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""Run the release readiness probe from any checkout without installation."""
+import runpy
+from pathlib import Path
+
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "ops/release_readiness.py"), run_name="__main__")
