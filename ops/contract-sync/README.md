@@ -30,8 +30,19 @@ bytes — and it never merges a PR that is not green.
    look at `git status`. No diff means nothing to do.
 6. On a diff: branch `auto/contract-sync-<be-sha8>` (api-docs appends `-<mcp-sha8>`), commit
    `chore: sync backend contracts to gen-backend-v2 <be-sha8>`, push, open a PR, poll the
-   PR head's statuses, and merge once they are all success.
-7. Advance the state only after every consumer reached a terminal disposition.
+   PR head's statuses, and merge once they are all success. When the backend moves on while
+   an older sync PR is still open, the older PR is closed with a comment naming the newer one.
+7. Advance a consumer's state only when its change reached a terminal good disposition. A
+   red or still-running PR holds that consumer's state, so the next tick re-checks the same
+   PR — rebasing it server-side when the consumer's main moved — and merges it once green.
+   The shared source checkpoints advance only after every consumer is terminal.
+
+A sync PR that is red on two consecutive ticks opens exactly one Plane ticket in project GEN
+(`a5aea607-62c9-430a-bc93-d46dce835f1e`, key from `PLANE_API_KEY`) naming the PR and the
+failing context; its id is recorded under `/var/lib/contract-sync/consumers/<repo>/ticket.<n>`
+so no second ticket is ever filed for the same PR. Per-consumer bookkeeping (the synced
+manifests, the open-PR marker, the red-tick counter and the ticket id) all live in
+`/var/lib/contract-sync/consumers/<repo>/`.
 
 One line per consumer goes to stdout, which the unit sends to journald.
 
@@ -111,7 +122,8 @@ sudo systemctl disable --now contract-sync.timer
 ```
 
 The state directory is `/var/lib/contract-sync`; deleting `last-be-sha` makes the next run
-treat itself as a first run and re-check every consumer.
+treat itself as a first run and re-check every consumer, and deleting `consumers/` does the
+same for the per-consumer bookkeeping.
 
 ## Guardrails
 
@@ -126,10 +138,14 @@ treat itself as a first run and re-check every consumer.
 - **No force-push, no branch reuse.** A branch for this backend sha that already has an open
   PR is that PR. A branch whose PR was closed is an error, never a re-open. Branches are left
   in place after a merge.
-- **The PR is the handoff.** A red or still-running PR is left open with a log line, and the
-  state advances so the next tick does not re-open it. A hard failure — clone, regeneration,
-  push, or the PR call itself — does not advance the state, so the next tick retries that
-  change instead of dropping it.
+- **A stalled PR is retried, not skipped.** A red or still-running PR holds its consumer's
+  state and is re-checked on the next tick — rebased server-side when the consumer's main
+  moved — until it merges. Two consecutive red ticks file a single Plane ticket for the PR;
+  the recorded ticket id stops a second one. A hard failure — clone, regeneration, push, or
+  the PR call itself — also does not advance the state, so the next tick retries that change
+  instead of dropping it.
+- **One open sync PR per consumer.** A newer backend sha supersedes an older open sync PR:
+  the older PR is closed with a comment naming the newer one.
 - **One run at a time.** `flock /var/lib/contract-sync/lock`; an overlapping tick exits
   immediately instead of cloning a second copy of every consumer.
 - **The token is never printed.** It appears only in a curl `Authorization` header.

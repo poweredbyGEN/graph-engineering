@@ -49,6 +49,7 @@ PRS_FILE="$STATE_DIR/.pulls.json"
 STATUS_TMP_FILE="$STATE_DIR/.pull-statuses.json"
 MANIFEST_TMP_FILE="$STATE_DIR/.watched-manifest.new"
 MCP_MANIFEST_TMP_FILE="$STATE_DIR/.mcp-watched-manifest.new"
+CONSUMER_STATE_DIR="$STATE_DIR/consumers"
 
 CURL_TIMEOUT="${CONTRACT_SYNC_CURL_TIMEOUT:-30}"
 GIT_TIMEOUT="${CONTRACT_SYNC_GIT_TIMEOUT:-300}"
@@ -60,6 +61,12 @@ STATUS_POLL_TIMEOUT="${CONTRACT_SYNC_STATUS_POLL_TIMEOUT:-900}"
 MAIN_PIPELINE_WAIT="${CONTRACT_SYNC_MAIN_PIPELINE_WAIT:-180}"
 COMMIT_NAME="${CONTRACT_SYNC_COMMIT_NAME:-contract-sync}"
 COMMIT_EMAIL="${CONTRACT_SYNC_COMMIT_EMAIL:-contract-sync@gen.pro}"
+
+# Plane receives one ticket when a sync PR stays red for two consecutive ticks.
+# The key comes from the environment (PLANE_API_KEY) and is never written here.
+PLANE_API_URL="${CONTRACT_SYNC_PLANE_URL:-https://plane.gen.pro}"
+PLANE_WORKSPACE="${CONTRACT_SYNC_PLANE_WORKSPACE:-gen}"
+PLANE_PROJECT="${CONTRACT_SYNC_PLANE_PROJECT:-a5aea607-62c9-430a-bc93-d46dce835f1e}"
 
 # gen-backend-v2 paths whose change triggers a consumer sync. A change anywhere
 # else (app code, tests) is not a contract change and must not open a PR.
@@ -313,6 +320,197 @@ record_sources() { # <backend-sha> <mcp-sha>
 }
 
 # -----------------------------------------------------------------------------
+# Per-consumer state. The source checkpoints above answer "did a watched file
+# change"; these answer "has this consumer actually consumed it". mav: "why are
+# we not auto updating the mcp based on deployments" (GEN-9472). A consumer
+# whose sync PR is red or still open does not advance: the next tick re-checks
+# the same PR and merges it once green, so a stall cannot be silently skipped.
+# -----------------------------------------------------------------------------
+
+consumer_state_dir() { # <name>
+  printf '%s/%s' "$CONSUMER_STATE_DIR" "$1"
+}
+
+consumer_pending() { # <name> — 0 while its sync PR is open
+  [ -f "$(consumer_state_dir "$1")/pending-pr" ]
+}
+
+any_pending_consumers() {
+  local marker
+  for marker in "$CONSUMER_STATE_DIR"/*/pending-pr; do
+    [ -f "$marker" ] && return 0
+  done
+  return 1
+}
+
+consumer_synced() { # <name> — 0 iff it already consumed the current manifests
+  local dir
+  dir="$(consumer_state_dir "$1")"
+  consumer_pending "$1" && return 1
+  [ -f "$dir/be-watched.tsv" ] || return 1
+  cmp -s "$dir/be-watched.tsv" "$MANIFEST_TMP_FILE" || return 1
+  if [ "$1" = "api-docs" ]; then
+    [ -f "$dir/mcp-watched.tsv" ] || return 1
+    cmp -s "$dir/mcp-watched.tsv" "$MCP_MANIFEST_TMP_FILE" || return 1
+  fi
+  return 0
+}
+
+record_consumer_state() { # <name> <backend-sha> <mcp-sha>
+  if [ "$DRY_RUN" = "1" ]; then
+    log "DRY_RUN: $1 consumer state not advanced"
+    return 0
+  fi
+  local dir
+  dir="$(consumer_state_dir "$1")"
+  mkdir -p "$dir"
+  cp -f "$MANIFEST_TMP_FILE" "$dir/be-watched.tsv.new"
+  mv -f "$dir/be-watched.tsv.new" "$dir/be-watched.tsv"
+  printf '%s\n' "$2" >"$dir/be-sha.new"
+  mv -f "$dir/be-sha.new" "$dir/be-sha"
+  cp -f "$MCP_MANIFEST_TMP_FILE" "$dir/mcp-watched.tsv.new"
+  mv -f "$dir/mcp-watched.tsv.new" "$dir/mcp-watched.tsv"
+  printf '%s\n' "$3" >"$dir/mcp-sha.new"
+  mv -f "$dir/mcp-sha.new" "$dir/mcp-sha"
+  rm -f "$dir/pending-pr" "$dir"/red-ticks.*
+}
+
+record_pending_pr() { # <name> <number> <branch> — hold this consumer until the PR is merged
+  if [ "$DRY_RUN" = "1" ]; then
+    return 0
+  fi
+  local dir
+  dir="$(consumer_state_dir "$1")"
+  mkdir -p "$dir"
+  printf 'pr=%s\nbranch=%s\n' "$2" "$3" >"$dir/pending-pr.new"
+  mv -f "$dir/pending-pr.new" "$dir/pending-pr"
+}
+
+clear_red_ticks() { # <name> <number> — a non-red tick breaks the red streak
+  if [ "$DRY_RUN" = "1" ]; then
+    return 0
+  fi
+  rm -f "$(consumer_state_dir "$1")/red-ticks.$2"
+}
+
+plane_create_ticket() { # <title> <body-html> — writes the id to $STATE_DIR/.plane-ticket-id
+  if [ "$DRY_RUN" = "1" ]; then
+    log "DRY_RUN: would open Plane ticket \"$1\""
+    return 1
+  fi
+  if [ -z "${PLANE_API_KEY:-}" ]; then
+    log "WARN Plane ticket \"$1\" not opened: PLANE_API_KEY is not set"
+    return 1
+  fi
+  local payload="$STATE_DIR/.plane-payload.json" response id
+  python3 -c '
+import json, sys
+print(json.dumps({"name": sys.argv[1], "description_html": sys.argv[2]}))
+' "$1" "$2" >"$payload"
+  response="$(curl -sS --max-time "$CURL_TIMEOUT" -X POST \
+    -H "X-API-Key: ${PLANE_API_KEY}" \
+    -H "User-Agent: curl/8.4.0" \
+    -H "Content-Type: application/json" \
+    --data-binary "@$payload" \
+    "$PLANE_API_URL/api/v1/workspaces/$PLANE_WORKSPACE/projects/$PLANE_PROJECT/issues/")" || {
+    log "ERROR Plane ticket \"$1\" was not created (request failed)"
+    return 1
+  }
+  printf '%s' "$response" >"$STATE_DIR/.plane-response.json"
+  id="$(json_scalar "$STATE_DIR/.plane-response.json" "sequence_id")"
+  if [ -z "$id" ]; then
+    id="$(json_scalar "$STATE_DIR/.plane-response.json" "id")"
+  fi
+  if [ -z "$id" ]; then
+    log "ERROR Plane ticket \"$1\" was not created (no id in response)"
+    return 1
+  fi
+  printf '%s\n' "$id" >"$STATE_DIR/.plane-ticket-id.new"
+  mv -f "$STATE_DIR/.plane-ticket-id.new" "$STATE_DIR/.plane-ticket-id"
+  return 0
+}
+
+# A check that is red on two consecutive ticks is a stall, not a flake: file
+# exactly one Plane ticket for the PR and remember its id, so no later tick
+# files a second one. mav: "why are we not auto updating the mcp based on
+# deployments" (GEN-9472).
+note_red_pr() { # <repo> <number> <failing-context>
+  local repo="$1" number="$2" context="$3" dir count ticket url body
+  dir="$(consumer_state_dir "$repo")"
+  count=0
+  if [ -r "$dir/red-ticks.$number" ]; then
+    count="$(cat "$dir/red-ticks.$number" 2>/dev/null || true)"
+  fi
+  case "$count" in
+    '' | *[!0-9]*) count=0 ;;
+  esac
+  count=$((count + 1))
+  if [ "$DRY_RUN" = "1" ]; then
+    log "DRY_RUN: $repo PR #$number red (tick $count); would open a Plane ticket for it"
+    return 0
+  fi
+  mkdir -p "$dir"
+  printf '%s\n' "$count" >"$dir/red-ticks.$number.new"
+  mv -f "$dir/red-ticks.$number.new" "$dir/red-ticks.$number"
+  [ "$count" -ge 2 ] || return 0
+  [ -f "$dir/ticket.$number" ] && return 0
+  url="$GITEA_URL/$GITEA_OWNER/$repo/pulls/$number"
+  body="$(printf '<p>Sync PR <a href="%s">%s</a> has had failing checks (<code>%s</code>) for %s consecutive ticks.</p>' \
+    "$url" "$url" "$context" "$count")"
+  if ! plane_create_ticket "contract-sync: $repo PR #$number red on $context" "$body"; then
+    return 0
+  fi
+  ticket="$(cat "$STATE_DIR/.plane-ticket-id")"
+  [ -n "$ticket" ] || return 0
+  printf '%s\n' "$ticket" >"$dir/ticket.$number.new"
+  mv -f "$dir/ticket.$number.new" "$dir/ticket.$number"
+  log "$repo: opened Plane ticket $ticket for PR #$number"
+}
+
+# A newer backend sha supersedes an older open sync PR for the same consumer:
+# the older PR is closed with a comment naming the newer one, so a consumer
+# never accumulates two open sync PRs. mav: "why are we not auto updating the
+# mcp based on deployments" (GEN-9472).
+close_superseded_prs() { # <repo> <keep-branch> <reason>
+  local repo="$1" keep_branch="$2" reason="$3"
+  local list_file="$STATE_DIR/.superseded-pulls.json" payload="$STATE_DIR/.closing-payload.json"
+  local number branch code
+  if [ "$DRY_RUN" = "1" ]; then
+    log "DRY_RUN: would close the sync PR(s) for $repo superseded by $reason"
+    return 0
+  fi
+  gitea_request GET "/repos/$GITEA_OWNER/$repo/pulls?state=open&limit=50" >"$list_file" || return 0
+  while IFS=$'\t' read -r number branch; do
+    [ -n "$number" ] || continue
+    python3 -c '
+import json, sys
+print(json.dumps({"body": "Superseded by %s — contract-sync keeps one open sync PR per consumer." % sys.argv[1]}))
+' "$reason" >"$payload"
+    code="$(gitea_status_code POST "/repos/$GITEA_OWNER/$repo/issues/$number/comments" "$payload")"
+    [ "$code" = "201" ] || log "WARN $repo: comment on superseded PR #$number failed (HTTP $code)"
+    printf '{"state": "closed"}\n' >"$payload"
+    code="$(gitea_status_code PATCH "/repos/$GITEA_OWNER/$repo/pulls/$number" "$payload")"
+    [ "$code" = "200" ] || log "WARN $repo: closing superseded PR #$number failed (HTTP $code)"
+    clear_red_ticks "$repo" "$number"
+    log "$repo: closed superseded PR #$number ($branch) — $reason"
+  done < <(python3 - "$list_file" "$BRANCH_PREFIX" "$keep_branch" <<'PY'
+import json
+import sys
+try:
+    pulls = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    raise SystemExit(0)
+prefix, keep = sys.argv[2], sys.argv[3]
+for pull in pulls if isinstance(pulls, list) else []:
+    head = (pull.get("head") or {}).get("ref") or ""
+    if not head.startswith(prefix) or head == keep:
+        continue
+    print("%s\t%s" % (pull.get("number"), head))
+PY
+)
+}
+
+# -----------------------------------------------------------------------------
 # Per-consumer regeneration. Each function writes into the consumer clone with
 # the repo's own generator; none of them edits an artifact by hand.
 # -----------------------------------------------------------------------------
@@ -330,10 +528,9 @@ regen_gen_mcp_server() { # <consumer-clone> <backend-clone>
   if [ -f "$clone/scripts/refresh_contracts.py" ]; then
     timeout "$REGEN_TIMEOUT" docker run --rm --cpus 2 \
       -v "$clone":/w -v "$backend":/backend -w /w "$MCP_IMAGE" sh -c \
-      'git config --global --add safe.directory "*" &&
+      "git config --global --add safe.directory '*' &&
         pip install -q -e . pytest >/dev/null 2>&1 &&
-        python scripts/refresh_contracts.py --backend-path /backend --ref "origin/$0"' \
-      "$BACKEND_BRANCH" || return $?
+        python scripts/refresh_contracts.py --backend-path /backend --ref \"origin/$BACKEND_BRANCH\"" || return $?
     return 0
   fi
   for script in "${MCP_REGENERATE[@]}"; do
@@ -525,18 +722,24 @@ merge_when_green() { # <repo> <number> <head-sha> — 0 merged, 10 left open, 11
   case "$verdict" in
     GREEN) ;;
     NONE)
+      clear_red_ticks "$repo" "$number"
       log "$repo: no check status for $head_sha yet; PR #$number is re-checked next tick"
       return 11
       ;;
     PENDING:*)
+      clear_red_ticks "$repo" "$number"
       log "$repo: checks still pending (${verdict#PENDING:}) after ${STATUS_POLL_TIMEOUT}s; PR #$number is re-checked next tick"
       return 11
       ;;
     RED:*)
-      log "$repo: checks not green (${verdict#RED:}); leaving PR #$number open"
+      # Red holds this consumer's state, so the next tick re-checks this PR
+      # instead of advancing past it (GEN-9472).
+      log "$repo: checks not green (${verdict#RED:}); leaving PR #$number open; re-checked next tick"
+      note_red_pr "$repo" "$number" "${verdict#RED:}"
       return 10
       ;;
   esac
+  clear_red_ticks "$repo" "$number"
 
   # Merging cancels the pipeline running for main's current head when that repo
   # runs its pipeline with concurrency: 1, which leaves main with no verdict at
@@ -595,7 +798,7 @@ process_consumer() { # <name> <backend-sha> <backend-clone> <mcp-sha> <mcp-clone
     title="chore: sync API contracts from backend ${backend_sha:0:8} and MCP ${mcp_sha:0:8}"
     provenance_mcp="$mcp_sha"
   fi
-  local regen_rc=0 pr_number="" head_sha="" body="" status_file
+  local regen_rc=0 pr_rc=0 pr_number="" head_sha="" body="" status_file
   local -a changed_paths=()
   local entry
 
@@ -619,6 +822,7 @@ process_consumer() { # <name> <backend-sha> <backend-clone> <mcp-sha> <mcp-clone
 
   if [ "$regen_rc" = "20" ]; then
     log "$name: skipped — $SKIP_REASON"
+    record_consumer_state "$name" "$backend_sha" "$mcp_sha"
     return 0
   fi
   if [ "$regen_rc" != "0" ]; then
@@ -637,6 +841,12 @@ process_consumer() { # <name> <backend-sha> <backend-clone> <mcp-sha> <mcp-clone
 
   if [ "${#changed_paths[@]}" = "0" ]; then
     log "$name: no diff — vendored copies already current with ${backend_sha:0:8}"
+    # An open PR whose content main already carries has nothing left to merge;
+    # close it rather than leaving it open forever.
+    if consumer_pending "$name"; then
+      close_superseded_prs "$name" "" "backend main ${backend_sha:0:8}"
+    fi
+    record_consumer_state "$name" "$backend_sha" "$mcp_sha"
     return 0
   fi
 
@@ -654,8 +864,13 @@ process_consumer() { # <name> <backend-sha> <backend-clone> <mcp-sha> <mcp-clone
     if [ -n "$pr_number" ]; then
       head_sha="$(json_scalar <(gitea_request GET "/repos/$GITEA_OWNER/$name/branches/$branch" || true) "commit.id")"
       log "$name: PR #$pr_number is already open for ${backend_sha:0:8}; re-checking it"
-      merge_when_green "$name" "$pr_number" "$head_sha"
-      return $?
+      close_superseded_prs "$name" "$branch" "PR #$pr_number"
+      record_pending_pr "$name" "$pr_number" "$branch"
+      merge_when_green "$name" "$pr_number" "$head_sha" || pr_rc=$?
+      if [ "$pr_rc" = "0" ]; then
+        record_consumer_state "$name" "$backend_sha" "$mcp_sha"
+      fi
+      return "$pr_rc"
     fi
     log "$name: ERROR branch $branch exists with no open PR; refusing to reuse it"
     return 1
@@ -702,10 +917,16 @@ process_consumer() { # <name> <backend-sha> <backend-clone> <mcp-sha> <mcp-clone
     return 1
   fi
 
+  close_superseded_prs "$name" "$branch" "PR #$pr_number"
+  record_pending_pr "$name" "$pr_number" "$branch"
   log "$name: PR #$pr_number opened for $head_sha; waiting for checks"
   # A merge is the whole hand-off: gen-deployd deploys gen-mcp-server main to
   # staging and production (mcp.gen.pro) and every other consumer on its own.
-  merge_when_green "$name" "$pr_number" "$head_sha"
+  merge_when_green "$name" "$pr_number" "$head_sha" || pr_rc=$?
+  if [ "$pr_rc" = "0" ]; then
+    record_consumer_state "$name" "$backend_sha" "$mcp_sha"
+  fi
+  return "$pr_rc"
 }
 
 # -----------------------------------------------------------------------------
@@ -757,7 +978,8 @@ if [ -r "$LAST_MCP_SHA_FILE" ]; then
 fi
 
 if [ "$backend_sha" = "$last_sha" ] && [ "$mcp_sha" = "$last_mcp_sha" ] \
-  && [ -r "$LAST_BE_MANIFEST_FILE" ] && [ -r "$LAST_MCP_MANIFEST_FILE" ]; then
+  && [ -r "$LAST_BE_MANIFEST_FILE" ] && [ -r "$LAST_MCP_MANIFEST_FILE" ] \
+  && ! any_pending_consumers; then
   log "backend main ${backend_sha:0:8}: no backend change; MCP main ${mcp_sha:0:8}: no MCP change since the last sync"
   exit 0
 fi
@@ -802,7 +1024,7 @@ if [ -n "$last_mcp_sha" ] && [ -r "$LAST_MCP_MANIFEST_FILE" ] \
   mcp_changed=0
 fi
 
-if [ "$backend_changed" = "0" ] && [ "$mcp_changed" = "0" ]; then
+if [ "$backend_changed" = "0" ] && [ "$mcp_changed" = "0" ] && ! any_pending_consumers; then
   log "backend main ${backend_sha:0:8}, MCP main ${mcp_sha:0:8}: watched files unchanged — no consumer action"
   record_sources "$backend_sha" "$mcp_sha"
   exit 0
@@ -823,7 +1045,16 @@ retry=0
 for name in "${CONSUMERS[@]}"; do
   # An MCP projection change does not alter the backend artifacts other
   # consumers vendor. Public docs join both exact sources once (GEN-8246).
-  if [ "$backend_changed" = "0" ] && [ "$name" != "api-docs" ]; then
+  # A consumer holding an open PR is always re-checked, even when the watched
+  # manifests match again.
+  if [ "$backend_changed" = "0" ] && [ "$name" != "api-docs" ] && ! consumer_pending "$name"; then
+    continue
+  fi
+  if consumer_synced "$name"; then
+    # Only its recorded sha can lag an unwatched change; nothing to redo.
+    if [ "$DRY_RUN" != "1" ]; then
+      record_consumer_state "$name" "$backend_sha" "$mcp_sha"
+    fi
     continue
   fi
   rc=0
@@ -839,13 +1070,13 @@ done
 # Advance only after every consumer reached a terminal disposition. A hard
 # error leaves the state untouched so the next tick retries the same change
 # instead of silently dropping it.
-if [ "$failed" = "0" ] && [ "$retry" = "0" ]; then
+if [ "$failed" = "0" ] && [ "$retry" = "0" ] && [ "$handed_off" = "0" ]; then
   record_sources "$backend_sha" "$mcp_sha"
   if [ "$DRY_RUN" != "1" ]; then
     log "backend main ${backend_sha:0:8}, MCP main ${mcp_sha:0:8}: state advanced"
   fi
 elif [ "$failed" = "0" ]; then
-  log "backend main ${backend_sha:0:8}: a sync PR is still waiting on checks; state not advanced, the next tick re-checks it"
+  log "backend main ${backend_sha:0:8}: a sync PR is not green yet; state not advanced, the next tick re-checks it"
 else
   log "backend main ${backend_sha:0:8}: a consumer errored; state not advanced, the next tick retries"
 fi
