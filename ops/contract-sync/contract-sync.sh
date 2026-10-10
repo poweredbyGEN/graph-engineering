@@ -328,6 +328,7 @@ regen_gen_mcp_server() { # <consumer-clone> <backend-clone>
   # Vendoring alone leaves the sync PR red (GEN-8145). The pins need the
   # package installed, so it runs in a Python image that also carries git.
   if [ -f "$clone/scripts/refresh_contracts.py" ]; then
+    # shellcheck disable=SC2016  # $0 belongs to the inner sh, not this shell
     timeout "$REGEN_TIMEOUT" docker run --rm --cpus 2 \
       -v "$clone":/w -v "$backend":/backend -w /w "$MCP_IMAGE" sh -c \
       'git config --global --add safe.directory "*" &&
@@ -515,8 +516,67 @@ merge_pr() { # <repo> <number> <style> — HTTP status on stdout
   gitea_status_code POST "/repos/$GITEA_OWNER/$repo/pulls/$number/merge" "$payload"
 }
 
-merge_when_green() { # <repo> <number> <head-sha> — 0 merged, 10 left open, 11 retry next tick, 1 error
-  local repo="$1" number="$2" head_sha="$3"
+# Post a comment, then close a PR. The comment goes first so the reason
+# survives a failed close; neither call may abort the tick.
+comment_and_close_pr() { # <repo> <number> <comment>
+  local repo="$1" number="$2" comment="$3"
+  local payload="$STATE_DIR/.pr-comment.json"
+  python3 -c 'import json, sys; print(json.dumps({"body": sys.argv[1]}))' "$comment" >"$payload"
+  gitea_status_code POST "/repos/$GITEA_OWNER/$repo/issues/$number/comments" "$payload" >/dev/null || true
+  python3 -c 'import json, sys; print(json.dumps({"state": sys.argv[1]}))' closed >"$payload"
+  gitea_status_code PATCH "/repos/$GITEA_OWNER/$repo/pulls/$number" "$payload" >/dev/null || true
+}
+
+# Close every open auto/contract-sync PR in <repo> whose branch names a backend
+# sha other than <keep-sha>. A merged or already-in-sync consumer otherwise
+# leaves older PRs open forever, which is how eight of them sat for a week
+# (GEN-9537). The caller supplies the comment naming the newer sha or
+# "main already in sync".
+close_superseded_prs() { # <repo> <keep-sha> <comment>
+  local repo="$1" keep_sha="$2" comment="$3"
+  [ "$DRY_RUN" = "1" ] && return 0
+  local keep8="${keep_sha:0:8}"
+  local number ref suffix be8
+  gitea_request GET "/repos/$GITEA_OWNER/$repo/pulls?state=open&limit=50" >"$PRS_FILE" 2>/dev/null || return 0
+  while IFS=$'\t' read -r number ref; do
+    [ -n "$number" ] || continue
+    suffix="${ref#"$BRANCH_PREFIX"}"
+    be8="${suffix%%-*}"
+    [ "$be8" = "$keep8" ] && continue
+    log "$repo: closing superseded PR #$number ($ref)"
+    comment_and_close_pr "$repo" "$number" "$comment"
+  done < <(
+    python3 - "$PRS_FILE" "$BRANCH_PREFIX" <<'PY'
+import json
+import sys
+try:
+    pulls = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    pulls = []
+prefix = sys.argv[2]
+for pull in pulls if isinstance(pulls, list) else []:
+    ref = str((pull.get("head") or {}).get("ref") or "")
+    if ref.startswith(prefix):
+        print("%s\t%s" % (pull.get("number"), ref))
+PY
+  )
+}
+
+# Merge the PR for this backend sha and, when it lands, close the older
+# superseded PRs in the same consumer. A merge is proof the older sha is
+# obsolete; while the PR is red or pending nothing is closed.
+merge_and_cleanup() { # <repo> <number> <head-sha> <branch> <backend-sha>
+  local repo="$1" number="$2" head_sha="$3" branch="$4" backend_sha="$5" rc=0
+  merge_when_green "$repo" "$number" "$head_sha" "$branch" || rc=$?
+  if [ "$rc" = "0" ]; then
+    close_superseded_prs "$repo" "$backend_sha" \
+      "Superseded by backend ${backend_sha:0:8}, which this PR carried and merged."
+  fi
+  return "$rc"
+}
+
+merge_when_green() { # <repo> <number> <head-sha> <branch> — 0 merged, 11 retry next tick
+  local repo="$1" number="$2" head_sha="$3" branch="$4"
   local verdict main_sha main_verdict tried style code
 
   # Only ci/woodpecker/* gates a merge, as in branch protection. Other contexts
@@ -533,8 +593,8 @@ merge_when_green() { # <repo> <number> <head-sha> — 0 merged, 10 left open, 11
       return 11
       ;;
     RED:*)
-      log "$repo: checks not green (${verdict#RED:}); leaving PR #$number open"
-      return 10
+      log "$repo: checks not green (${verdict#RED:}); leaving PR #$number open, re-checked next tick"
+      return 11
       ;;
   esac
 
@@ -544,8 +604,8 @@ merge_when_green() { # <repo> <number> <head-sha> — 0 merged, 10 left open, 11
   # nothing to cancel.
   main_sha="$(json_scalar <(gitea_request GET "/repos/$GITEA_OWNER/$repo/branches/$CONSUMER_BRANCH" || true) "commit.id")"
   if [ -z "$main_sha" ]; then
-    log "$repo: cannot read $CONSUMER_BRANCH head; leaving PR #$number open"
-    return 10
+    log "$repo: cannot read $CONSUMER_BRANCH head; leaving PR #$number open, re-checked next tick"
+    return 11
   fi
   main_verdict="$(await_checks "$repo" "$main_sha" "ci/woodpecker/push/" "$MAIN_PIPELINE_WAIT" "yes")"
   case "$main_verdict" in
@@ -573,14 +633,26 @@ merge_when_green() { # <repo> <number> <head-sha> — 0 merged, 10 left open, 11
     log "$repo: merge refused for PR #$number ($tried); rebased it onto $CONSUMER_BRANCH, re-checked next tick"
     return 11
   fi
-  log "$repo: merge refused for PR #$number ($tried) and rebase onto $CONSUMER_BRANCH failed (HTTP $code); leaving it open"
-  return 10
+  if [ "$code" = "409" ] || [ "$code" = "422" ]; then
+    # A rebase conflict cannot be resolved by the bot. Close the PR and drop its
+    # branch so the next tick regenerates a fresh branch from current main
+    # instead of re-visiting a PR that can never merge (GEN-9537).
+    comment_and_close_pr "$repo" "$number" \
+      "Closed: this sync branch conflicts with $CONSUMER_BRANCH and cannot be rebased automatically. A fresh branch from current main is generated on the next run."
+    gitea_status_code DELETE "/repos/$GITEA_OWNER/$repo/branches/$branch" >/dev/null || true
+    log "$repo: rebase of PR #$number onto $CONSUMER_BRANCH conflicted (HTTP $code); closed it and dropped the branch, next tick regenerates"
+    return 11
+  fi
+  log "$repo: merge refused for PR #$number ($tried) and rebase onto $CONSUMER_BRANCH failed (HTTP $code); re-checked next tick"
+  return 11
 }
 
 # -----------------------------------------------------------------------------
 # One consumer: regenerate, and hand a diff off as a green-and-merged PR.
-# Returns 0 (nothing to do / merged / skipped), 10 (PR left open for a human)
-# or 1 (error, so the next tick retries instead of losing the change).
+# Returns 0 (nothing to do / merged / skipped), 11 (a PR is still open and is
+# re-checked next tick) or 1 (error, so the next tick retries instead of losing
+# the change). A red check or a rebase conflict never advances the state, so the
+# next tick always revisits the open PR instead of abandoning it (GEN-9537).
 # -----------------------------------------------------------------------------
 
 process_consumer() { # <name> <backend-sha> <backend-clone> <mcp-sha> <mcp-clone>
@@ -637,6 +709,8 @@ process_consumer() { # <name> <backend-sha> <backend-clone> <mcp-sha> <mcp-clone
 
   if [ "${#changed_paths[@]}" = "0" ]; then
     log "$name: no diff — vendored copies already current with ${backend_sha:0:8}"
+    close_superseded_prs "$name" "$backend_sha" \
+      "main already in sync with backend ${backend_sha:0:8}; this auto/contract-sync PR is superseded."
     return 0
   fi
 
@@ -654,7 +728,7 @@ process_consumer() { # <name> <backend-sha> <backend-clone> <mcp-sha> <mcp-clone
     if [ -n "$pr_number" ]; then
       head_sha="$(json_scalar <(gitea_request GET "/repos/$GITEA_OWNER/$name/branches/$branch" || true) "commit.id")"
       log "$name: PR #$pr_number is already open for ${backend_sha:0:8}; re-checking it"
-      merge_when_green "$name" "$pr_number" "$head_sha"
+      merge_and_cleanup "$name" "$pr_number" "$head_sha" "$branch" "$backend_sha"
       return $?
     fi
     log "$name: ERROR branch $branch exists with no open PR; refusing to reuse it"
@@ -705,7 +779,7 @@ process_consumer() { # <name> <backend-sha> <backend-clone> <mcp-sha> <mcp-clone
   log "$name: PR #$pr_number opened for $head_sha; waiting for checks"
   # A merge is the whole hand-off: gen-deployd deploys gen-mcp-server main to
   # staging and production (mcp.gen.pro) and every other consumer on its own.
-  merge_when_green "$name" "$pr_number" "$head_sha"
+  merge_and_cleanup "$name" "$pr_number" "$head_sha" "$branch" "$backend_sha"
 }
 
 # -----------------------------------------------------------------------------

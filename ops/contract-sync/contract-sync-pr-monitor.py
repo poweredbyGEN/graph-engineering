@@ -15,10 +15,10 @@ is a failed systemd unit that nobody sees.
 This monitor closes that gap: every cycle it lists the open PRs whose head
 branch starts with ``auto/contract-sync-``, reads the head sha's commit statuses
 (newest per ``ci/woodpecker/*`` context, Gitea field ``status`` not ``state``),
-classifies each PR RED / STALE / OK, and for RED or STALE it (a) creates exactly
-one Plane ticket per PR (commenting only when the head sha changes), and (b)
-posts a Slack #errors message in the shared alert_policy format with a
-MiMo-only advise RCA and exactly one ``DECISION:`` footer.
+classifies each PR RED / CONFLICT / STALE / OK, and for RED, CONFLICT or STALE it
+(a) creates exactly one Plane ticket per PR (commenting only when the head sha
+changes), and (b) posts a Slack #errors message in the shared alert_policy
+format with a MiMo-only advise RCA and exactly one ``DECISION:`` footer.
 
 Read-only: it never mutates Gitea or production. Every network side effect goes
 through the module-level functions below so tests can monkeypatch them.
@@ -261,13 +261,19 @@ def newest_per_context(statuses: list[dict[str, Any]]) -> dict[str, dict[str, An
     return by_ctx
 
 
-def classify(pr_created: Any, statuses: list[dict[str, Any]], stale_hours: int) -> tuple[str, list[dict[str, Any]]]:
+def classify(pr: dict[str, Any], statuses: list[dict[str, Any]], stale_hours: int) -> tuple[str, list[dict[str, Any]]]:
+    # A conflict is a hard stop the same way a red check is: Gitea reports it as
+    # mergeable=false on an otherwise green PR, and it never becomes OK on its
+    # own (GEN-9537). RED wins when checks are also failing.
+    mergeable = pr.get("mergeable")
     woody = {ctx: e for ctx, e in newest_per_context(statuses).items() if ctx.startswith("ci/woodpecker/")}
     failing = [e for e in woody.values() if (e.get("status") or "").lower() in FAILURE_STATES]
     if failing:
         return "RED", failing
+    if mergeable is False:
+        return "CONFLICT", []
 
-    created_ts = parse_time(pr_created) or 0.0
+    created_ts = parse_time(pr.get("created_at")) or 0.0
     age_hours = (time.time() - created_ts) / 3600.0
 
     if not woody:
@@ -311,11 +317,19 @@ def issue_url(issue: dict[str, Any]) -> str:
     return f"{PLANE_BASE}/gen/projects/{PLANE_PROJECT_ID}/issues/{ident}"
 
 
+def ticket_kind(classification: str) -> str:
+    if classification == "RED":
+        return "failing CI"
+    if classification == "CONFLICT":
+        return "not mergeable (conflict with the base branch)"
+    return "stale (CI pending or no status)"
+
+
 def ticket_description(repo: str, pr: dict[str, Any], classification: str, head_sha: str) -> str:
     number = pr.get("number")
     pr_url = str(pr.get("html_url") or "")
     title = str(pr.get("title") or "")
-    kind = "failing CI" if classification == "RED" else "stale (CI pending or no status)"
+    kind = ticket_kind(classification)
     return (
         f"<p>The contract-sync bot opened PR <a href=\"{pr_url}\">{repo}#{number}</a> "
         f"(\"{title}\") to sync backend contracts, and its CI is {kind}.</p>"
@@ -328,7 +342,7 @@ def ticket_description(repo: str, pr: dict[str, Any], classification: str, head_
 def ticket_comment(repo: str, pr: dict[str, Any], classification: str, head_sha: str) -> str:
     number = pr.get("number")
     pr_url = str(pr.get("html_url") or "")
-    kind = "failing CI" if classification == "RED" else "stale (CI pending or no status)"
+    kind = ticket_kind(classification)
     return (
         f"<p>The head sha changed to <code>{head_sha}</code> and the PR is still {kind}. "
         f"The consumer repository remains out of date. PR: {pr_url}</p>"
@@ -342,8 +356,9 @@ def ensure_ticket(repo: str, pr: dict[str, Any], classification: str, head_sha: 
     entry = tickets.get(pr_url)
     if entry is None:
         try:
+            title_kind = "conflict" if classification == "CONFLICT" else "red"
             issue = plane_create_issue({
-                "name": f"contract-sync PR red: {repo}#{number}",
+                "name": f"contract-sync PR {title_kind}: {repo}#{number}",
                 "description_html": ticket_description(repo, pr, classification, head_sha),
             })
             tickets[pr_url] = {"issue_id": issue.get("id"), "head_sha": head_sha, "url": issue_url(issue)}
@@ -380,6 +395,7 @@ def build_evidence(repo: str, pr: dict[str, Any], classification: str,
         f"number={number}",
         f"head_sha={head_sha}",
         f"classification={classification}",
+        f"mergeable={pr.get('mergeable')}",
     ]
     if failing:
         parts.append("failing_contexts=" + "; ".join(
@@ -405,9 +421,16 @@ def build_message(repo: str, pr: dict[str, Any], classification: str,
     number = pr.get("number")
     head_sha = str((pr.get("head") or {}).get("sha") or "")[:8]
     pr_url = str(pr.get("html_url") or "")
-    status = "CONTRACT_SYNC_PR_RED" if classification == "RED" else "CONTRACT_SYNC_PR_STALE"
+    if classification == "RED":
+        status = "CONTRACT_SYNC_PR_RED"
+    elif classification == "CONFLICT":
+        status = "CONTRACT_SYNC_PR_CONFLICT"
+    else:
+        status = "CONTRACT_SYNC_PR_STALE"
     if failing:
         issue = ", ".join(f"{e.get('context')}={e.get('status')}" for e in failing)
+    elif classification == "CONFLICT":
+        issue = "PR is not mergeable against its base branch (mergeable=false)"
     elif classification == "STALE":
         issue = "ci/woodpecker pending or no status beyond stale window"
     else:
@@ -428,7 +451,9 @@ def build_message(repo: str, pr: dict[str, Any], classification: str,
         "SELF_HEAL: no_safe_auto_fix_mapped",
         f"RCA: {rca}",
         f"EVIDENCE: {compact(evidence, 1200)}",
-        "NEXT: fix the failing CI gate; consumer stays out of date until the PR merges",
+        "NEXT: " + ("resolve the conflict with the base branch; consumer stays out of date until the PR merges"
+                  if classification == "CONFLICT"
+                  else "fix the failing CI gate; consumer stays out of date until the PR merges"),
         decision,
         f"URL: {pr_url}",
         f"SOURCE: probe={HOST}:{SCRIPT}",
@@ -466,7 +491,7 @@ def cycle() -> dict[str, Any]:
             except Exception as exc:
                 log(ALERT_LOG, f"tier=SELF channel=gitea status=statuses_error repo={repo} pr={number} msg={json.dumps(str(exc))}")
                 continue
-            classification, failing = classify(pr.get("created_at"), statuses, STALE_HOURS)
+            classification, failing = classify(pr, statuses, STALE_HOURS)
             log(PROBE_LOG, f"repo={repo} pr={number} branch={branch} head_sha={head_sha} classification={classification} statuses={len(statuses)}")
             if classification == "OK":
                 continue

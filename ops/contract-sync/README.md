@@ -31,7 +31,13 @@ bytes — and it never merges a PR that is not green.
 6. On a diff: branch `auto/contract-sync-<be-sha8>` (api-docs appends `-<mcp-sha8>`), commit
    `chore: sync backend contracts to gen-backend-v2 <be-sha8>`, push, open a PR, poll the
    PR head's statuses, and merge once they are all success.
-7. Advance the state only after every consumer reached a terminal disposition.
+7. After a PR merges, or when a consumer's regeneration produces no diff, close every other
+   open `auto/contract-sync-*` PR in that consumer whose backend sha is older, with a comment
+   naming the newer sha or "main already in sync" (GEN-9537).
+8. Advance the state only after every consumer reached a terminal disposition. A red check or
+   a rebase conflict returns retry (11), so the state is not advanced and the next tick
+   revisits the PR; a rebase conflict also closes the PR and drops its branch so the next tick
+   regenerates from current main.
 
 One line per consumer goes to stdout, which the unit sends to journald.
 
@@ -90,6 +96,32 @@ The offline test builds local bare repositories and runs the same code against t
 
 ```bash
 bash ops/contract-sync/test_contract_sync.sh     # fixtures under /mnt/data/tmp
+python3 ops/contract-sync/test_contract_sync_pr_monitor.py
+```
+
+The shell test runs the monitor test as one of its cases, so the first command covers both.
+
+## PR monitor
+
+The sync timer leaves a red or conflicted PR open for a human. A second unit on
+`qa-deploy-box`, `contract-sync-pr-monitor.py` (timer every 10 minutes), closes that gap: it
+lists the open `auto/contract-sync-*` PRs in every consumer, reads the newest
+`ci/woodpecker/*` status per context, and classifies each PR:
+
+| Classification | Meaning |
+|---|---|
+| `RED` | a `ci/woodpecker/*` check is failing |
+| `CONFLICT` | the PR is green but `mergeable=false` against its base (GEN-9537) |
+| `STALE` | checks are pending or absent past `STALE_HOURS` |
+| `OK` | green and mergeable |
+
+For `RED`, `CONFLICT` or `STALE` it opens one Plane ticket per PR and posts one Slack
+`#errors` alert in the shared `alert_policy` format. A conflict is alerted exactly like a
+red check; it is never reported `OK`. The canonical source lives in this repo; the install
+command is in **Install** below. Run its classification test offline with:
+
+```bash
+python3 ops/contract-sync/test_contract_sync_pr_monitor.py
 ```
 
 ## Install
@@ -97,8 +129,9 @@ bash ops/contract-sync/test_contract_sync.sh     # fixtures under /mnt/data/tmp
 ```bash
 sudo install -m 0644 ops/contract-sync/contract-sync.service /etc/systemd/system/
 sudo install -m 0644 ops/contract-sync/contract-sync.timer   /etc/systemd/system/
+sudo install -m 0644 ops/contract-sync/contract-sync-pr-monitor.py /usr/local/bin/contract-sync-pr-monitor.py
 sudo systemctl daemon-reload
-sudo systemctl enable --now contract-sync.timer
+sudo systemctl enable --now contract-sync.timer contract-sync-pr-monitor.timer
 ```
 
 The unit's `ExecStart` assumes the checkout at `/opt/agent-infra`; edit it (or a drop-in) if
@@ -124,12 +157,13 @@ treat itself as a first run and re-check every consumer.
   every deploy gated on it. The script waits for main's own `ci/woodpecker/push/*` statuses
   to settle before merging; a repo with no such status has nothing to cancel.
 - **No force-push, no branch reuse.** A branch for this backend sha that already has an open
-  PR is that PR. A branch whose PR was closed is an error, never a re-open. Branches are left
-  in place after a merge.
-- **The PR is the handoff.** A red or still-running PR is left open with a log line, and the
-  state advances so the next tick does not re-open it. A hard failure — clone, regeneration,
-  push, or the PR call itself — does not advance the state, so the next tick retries that
-  change instead of dropping it.
+  PR is that PR. A branch whose PR was closed by a human is an error, never a re-open.
+  Branches are left in place after a merge. A rebase conflict is the exception: the bot closes
+  its own PR and deletes that branch so the next tick creates a fresh one from current main.
+- **The PR is never abandoned.** A red or still-running PR is left open and the state is not
+  advanced, so the next tick re-checks the same PR. A hard failure — clone, regeneration,
+  push, or the PR call itself — also does not advance the state. Only a merge or a no-diff
+  disposition advances it, and either one closes the older superseded PRs.
 - **One run at a time.** `flock /var/lib/contract-sync/lock`; an overlapping tick exits
   immediately instead of cloning a second copy of every consumer.
 - **The token is never printed.** It appears only in a curl `Authorization` header.

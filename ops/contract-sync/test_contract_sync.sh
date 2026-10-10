@@ -4,7 +4,9 @@
 # intent: a sync that quietly stops running, or that merges without a green check, looks
 # exactly like a backend that never changed. These cases pin the behaviour that must hold:
 # only a watched backend path triggers a consumer, a converged consumer is a no-op, a diff
-# becomes a branch/commit/PR with a fast-forward-only merge, a red check never merges, a hard
+# becomes a branch/commit/PR with a fast-forward-only merge, a red check never merges and
+# never advances the state (the next tick revisits it), a rebase conflict closes its PR and
+# regenerates from main, a merged or converged consumer closes older superseded PRs, a hard
 # failure leaves the change queued, a multi-step regeneration stops at the first failure, and
 # the API token is never printed.
 #
@@ -183,6 +185,18 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# T13 — the PR monitor classifies a green-but-unmergeable PR as CONFLICT and
+# alerts, instead of reporting it OK (GEN-9537).
+# -----------------------------------------------------------------------------
+
+printf 'T13 PR monitor conflict classification\n'
+if python3 "$HERE/test_contract_sync_pr_monitor.py"; then
+  pass "T13 monitor test"
+else
+  fail "T13 monitor test"
+fi
+
+# -----------------------------------------------------------------------------
 # T5 — the consumer already matches the backend, so bootstrap finds no diff.
 # -----------------------------------------------------------------------------
 
@@ -246,7 +260,6 @@ printf 'T4 unwatched backend change touches no consumer\n'
 printf '# v2\n' >"$BE_WORK/app/foo.rb"
 commit_all "$BE_WORK" "backend v2 app code"
 git -C "$BE_WORK" push -q origin main
-be3_sha="$(git -C "$BE_WORK" rev-parse HEAD)"
 rm -rf "$STATE_DIR/gen-agentic"
 run_sync || fail "T4 run exited non-zero"
 out="$(cat "$OUT")"
@@ -313,7 +326,20 @@ def status_mode():
         return "success"
 
 
-open_heads = []
+# Open pull requests, number -> head branch. New PRs always take number 1 so
+# the single-PR assertions in the rest of the suite stay stable; seeded PRs use
+# numbers >= 10 and never collide.
+open_prs = {}
+
+
+def branch_head(repo, branch):
+    try:
+        return subprocess.check_output(
+            ["git", "--git-dir", f"{repo_root}/{repo}.git", "rev-parse", f"refs/heads/{branch}"],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+    except subprocess.CalledProcessError:
+        return None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -329,19 +355,23 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _record(self, entry):
+        entry.setdefault("method", self.command)
         with open(log_path, "a") as fh:
             fh.write(json.dumps(entry) + "\n")
 
     def do_GET(self):
         path = self.path.split("?")[0]
-        self._record({"path": self.path, "method": "GET"})
+        self._record({"path": self.path})
         if path.endswith("/pulls"):
-            return self._send(200, [{"number": 1, "state": "open", "head": {"ref": h}} for h in open_heads])
+            return self._send(200, [
+                {"number": n, "state": "open", "head": {"ref": ref}}
+                for n, ref in sorted(open_prs.items())
+            ])
         if "/commits/" in path and path.endswith("/statuses"):
             # The second context mirrors a workflow no runner executes: it stays
             # pending forever and must never hold back a merge.
             mode = status_mode()
-            state = "success" if mode in ("behind", "busy") else mode
+            state = "success" if mode in ("behind", "busy", "conflict") else mode
             if mode == "busy" and "/commits/" + "0" * 40 + "/" in path:
                 state = "pending"
             if mode == "absent":
@@ -354,31 +384,74 @@ class Handler(BaseHTTPRequestHandler):
         if "/branches/" in path:
             if path.endswith("/main"):
                 return self._send(200, {"name": "main", "commit": {"id": "0" * 40}})
-            if path.split("/branches/", 1)[1] in open_heads:
-                repo = path.split("/repos/", 1)[1].split("/")[1]
-                branch = path.split("/branches/", 1)[1]
-                head = subprocess.check_output(["git", "--git-dir", f"{repo_root}/{repo}.git", "rev-parse", f"refs/heads/{branch}"], text=True).strip()
-                return self._send(200, {"commit": {"id": head}})
-            return self._send(404, {"message": "branch not found"})
+            repo = path.split("/repos/", 1)[1].split("/")[1]
+            branch = path.split("/branches/", 1)[1]
+            head = branch_head(repo, branch)
+            if head is None and branch in open_prs.values():
+                head = "0" * 40
+            if head is None:
+                return self._send(404, {"message": "branch not found"})
+            return self._send(200, {"commit": {"id": head}})
         return self._send(404, {"message": "no route"})
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b"{}"
-        payload = json.loads(raw or b"{}")
-        if self.path.endswith("/merge"):
-            self._record({"path": self.path, "do": payload.get("Do")})
-            if status_mode() == "behind":
+        try:
+            payload = json.loads(raw or b"{}")
+        except ValueError:
+            payload = {}
+        path = self.path.split("?")[0]
+        if path == "/__reset":
+            open_prs.clear()
+            for item in payload.get("prs", []):
+                open_prs[int(item["number"])] = str(item["ref"])
+            return self._send(204, {})
+        if path.endswith("/merge"):
+            number = int(path.split("/pulls/", 1)[1].split("/")[0])
+            self._record({"path": self.path, "number": number, "do": payload.get("Do")})
+            if status_mode() in ("behind", "conflict"):
                 return self._send(405, {"message": "Not possible to fast-forward"})
+            open_prs.pop(number, None)
             return self._send(200, {"merged": True})
-        if "/update" in self.path:
+        if "/update" in path:
             self._record({"path": self.path, "update": True})
-            return self._send(200, {})
-        if self.path.endswith("/pulls"):
+            return self._send(409 if status_mode() == "conflict" else 200, {})
+        if "/issues/" in path and path.endswith("/comments"):
+            number = path.split("/issues/", 1)[1].split("/")[0]
+            self._record({"path": self.path, "number": number, "comment": payload.get("body")})
+            return self._send(201, {"id": 1})
+        if path.endswith("/pulls"):
             self._record({"path": self.path, "head": payload.get("head"), "title": payload.get("title"), "body": payload.get("body")})
-            open_heads.append(payload.get("head"))
+            open_prs[1] = payload.get("head")
             return self._send(201, {"number": 1, "html_url": "http://mock.invalid/pr/1", "head": {"ref": payload.get("head")}})
         return self._send(404, {"message": "no route"})
+
+    def do_PATCH(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        if length:
+            self.rfile.read(length)
+        path = self.path.split("?")[0]
+        number = int(path.split("/pulls/", 1)[1].split("/")[0])
+        self._record({"path": self.path, "number": number, "closed": True})
+        open_prs.pop(number, None)
+        return self._send(200, {})
+
+    def do_DELETE(self):
+        path = self.path.split("?")[0]
+        if "/branches/" not in path:
+            return self._send(404, {"message": "no route"})
+        repo = path.split("/repos/", 1)[1].split("/")[1]
+        branch = path.split("/branches/", 1)[1]
+        subprocess.run(
+            ["git", "--git-dir", f"{repo_root}/{repo}.git", "update-ref", "-d", f"refs/heads/{branch}"],
+            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        for number, ref in list(open_prs.items()):
+            if ref == branch:
+                open_prs.pop(number, None)
+        self._record({"path": self.path, "branch": branch, "deleted": True})
+        return self._send(204, {})
 
 
 server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -449,7 +522,7 @@ assert_not_contains "T7 token never printed on the live path" "$out" "$TOKEN_SEN
 # reports failure instead of quietly treating the handoff as done.
 # -----------------------------------------------------------------------------
 
-printf 'T8 red checks leave the PR open\n'
+printf 'T8 red checks leave the PR open and the state unadvanced\n'
 write_json "$BE_WORK/docs/generated/user-job-enums.json" 4 userjob
 commit_all "$BE_WORK" "backend v4 user-job-enums"
 git -C "$BE_WORK" push -q origin main
@@ -458,7 +531,7 @@ be5_sha8="${be5_sha:0:8}"
 printf 'failure\n' >"$MOCK_MODE"
 : >"$MOCK_LOG"
 rm -rf "$STATE_DIR/gen-agentic"
-rc=0
+state_before="$(state_sha)"
 CONTRACT_SYNC_STATE_DIR="$STATE_DIR" \
   CONTRACT_SYNC_GIT_BASE="$GIT_BASE" \
   CONTRACT_SYNC_OWNER="$OWNER" \
@@ -485,7 +558,7 @@ for line in open(sys.argv[1]):
     if "do" in row:
         print(row["do"])
 ' "$MOCK_LOG")"
-assert_equal "T8 the handoff still advances the state" "$be5_sha" "$(state_sha)"
+assert_equal "T8 the state is not advanced on a red check" "$state_before" "$(state_sha)"
 assert_not_contains "T8 token never printed" "$out" "$TOKEN_SENTINEL"
 
 # -----------------------------------------------------------------------------
@@ -498,6 +571,7 @@ write_json "$BE_WORK/docs/generated/user-job-enums.json" 5 userjob
 commit_all "$BE_WORK" "backend v5 user-job-enums"
 git -C "$BE_WORK" push -q origin main
 rm -rf "$STATE_DIR/gen-agentic"
+state_before="$(state_sha)"
 rc=0
 CONTRACT_SYNC_STATE_DIR="$STATE_DIR" \
   CONTRACT_SYNC_GIT_BASE="file://$TEST_ROOT/no-such-forge" \
@@ -510,7 +584,7 @@ out="$(cat "$LIVE_OUT")"
 assert_equal "T9 the run reports failure" "1" "$rc"
 assert_contains "T9 names the failure" "$out" "ERROR cannot clone"
 assert_contains "T9 says the change is queued" "$out" "state not advanced, the next tick retries"
-assert_equal "T9 state did not advance" "$be5_sha" "$(state_sha)"
+assert_equal "T9 state did not advance" "$state_before" "$(state_sha)"
 rm -rf "$STATE_DIR/gen-agentic"
 run_sync || fail "T9 retry run exited non-zero"
 out="$(cat "$OUT")"
@@ -619,6 +693,8 @@ printf 'success\n' >"$MOCK_MODE"
 # -----------------------------------------------------------------------------
 
 printf 'R07 MCP source and combined docs flow\n'
+# Clear PRs left by the earlier live cases so docs assertions stay isolated.
+curl -sS -X POST "$MOCK_URL/__reset" -H 'Content-Type: application/json' -d '{"prs":[]}' >/dev/null || true
 STATE_DIR="$TEST_ROOT/docs-state"
 DOCS_BARE="$TEST_ROOT/$OWNER/api-docs.git"
 DOCS_WORK="$WORK/api-docs"
@@ -711,7 +787,7 @@ git -C "$DOCS_WORK" push -q origin main
 : >"$MOCK_LOG"
 docs_sync 0 || fail "R2 converged real disposition succeeds"
 assert_contains "R2 converged consumer has no diff" "$(cat "$LIVE_OUT")" "api-docs: no diff"
-assert_empty "R2 no forge API mutation" "$(cat "$MOCK_LOG")"
+assert_empty "R2 no forge API mutation" "$(grep -v '"method": "GET"' "$MOCK_LOG" || true)"
 assert_empty "R2 no sync branch or CI-producing push" "$(auto_branches "$DOCS_BARE")"
 assert_equal "R2 successful no-diff disposition checkpoints MCP" "$mcp_v2" "$(cat "$STATE_DIR/last-mcp-sha")"
 docs_sync 0 || fail "R2 repeated tick succeeds"
@@ -813,20 +889,28 @@ for line in open(sys.argv[1]):
 assert_contains "R5 PR provenance names exact backend" "$pr_body" "$be_combined"
 assert_contains "R5 PR provenance names exact MCP" "$pr_body" "$mcp_combined"
 
-# intent: a red source change is handed to human monitoring without a merge or
-# repeated push; the bot preserves its deliberate terminal-handoff semantics.
+# intent: a red source change is never merged and never checkpoints the
+# source; the next tick revisits the open PR, and only a green retry advances
+# the state (GEN-9537).
 printf 'gen_fixture_action\tv4\n' >"$MCP_WORK/$MCP_RECORD/schema-paths.tsv"
 commit_all "$MCP_WORK" "mcp schema-only v4"
 git -C "$MCP_WORK" push -q origin main
+mcp_before="$(cat "$STATE_DIR/last-mcp-sha")"
 : >"$MOCK_LOG"
 printf 'failure\n' >"$MOCK_MODE"
 rc=0
 docs_sync 0 "api-docs" || rc=$?
 assert_equal "R8 red PR remains a reported failure" "1" "$rc"
 assert_not_contains "R8 red never merges" "$(cat "$MOCK_LOG")" '"do":'
-assert_equal "R8 terminal red handoff checkpoints source" "$(git -C "$MCP_WORK" rev-parse HEAD)" "$(cat "$STATE_DIR/last-mcp-sha")"
-docs_sync 0 "api-docs" || fail "R8 monitored red handoff is not re-pushed"
-assert_not_contains "R8 terminal red tick causes no generator churn" "$(cat "$LIVE_OUT")" "api-docs:"
+assert_equal "R8 red does not checkpoint the source" "$mcp_before" "$(cat "$STATE_DIR/last-mcp-sha")"
+rc=0
+docs_sync 0 "api-docs" || rc=$?
+assert_equal "R8 the red source PR is still a failure" "1" "$rc"
+assert_contains "R8 the next tick re-checks the open PR" "$(cat "$LIVE_OUT")" "re-checking it"
+printf 'success\n' >"$MOCK_MODE"
+docs_sync 0 "api-docs" || fail "R8 green retry succeeds"
+assert_contains "R8 the green retry merges" "$(cat "$LIVE_OUT")" "merged PR #1"
+assert_equal "R8 the green retry checkpoints the source" "$(git -C "$MCP_WORK" rev-parse HEAD)" "$(cat "$STATE_DIR/last-mcp-sha")"
 
 # intent: flock admits one worker, even when a second-source tick overlaps it.
 (
@@ -836,6 +920,142 @@ assert_not_contains "R8 terminal red tick causes no generator churn" "$(cat "$LI
 ) || fail "R8 overlapping worker exits cleanly"
 assert_contains "R8 second worker cannot enter source work" "$(cat "$LIVE_OUT")" "another run holds"
 assert_not_contains "R8 token sentinel never reaches source-flow logs" "$(cat "$LIVE_OUT")$(cat "$MOCK_LOG")" "$TOKEN_SENTINEL"
+
+# -----------------------------------------------------------------------------
+# T14-T17 — superseded-PR cleanup, retry-on-red and rebase-conflict handling.
+# A fresh state dir and the mock's __reset control endpoint keep the open-PR set
+# isolated per case; the mock closes and deletes for real in the consumer bare
+# repo, so the next-tick behaviour is exercised end to end.
+# -----------------------------------------------------------------------------
+
+CLEAN_STATE="$TEST_ROOT/cleanup-state"
+clean_state_sha() { cat "$CLEAN_STATE/last-be-sha" 2>/dev/null || true; }
+cleanup_sync() { # <status-mode>
+  printf '%s\n' "$1" >"$MOCK_MODE"
+  CONTRACT_SYNC_STATE_DIR="$CLEAN_STATE" \
+    CONTRACT_SYNC_GIT_BASE="$GIT_BASE" \
+    CONTRACT_SYNC_OWNER="$OWNER" \
+    CONTRACT_SYNC_BACKEND_URL="$BE_URL" \
+    CONTRACT_SYNC_CONSUMERS="gen-agentic" \
+    CONTRACT_SYNC_STATUS_POLL_INTERVAL=1 \
+    CONTRACT_SYNC_STATUS_POLL_TIMEOUT=10 \
+    CONTRACT_SYNC_MAIN_PIPELINE_WAIT=3 \
+    GEN_GITEA_URL="$MOCK_URL" \
+    GEN_GITEA_TOKEN="$TOKEN_SENTINEL" \
+    bash "$SYNC" >"$LIVE_OUT" 2>&1
+}
+seed_prs() { # <json object>
+  curl -sS -X POST "$MOCK_URL/__reset" -H 'Content-Type: application/json' -d "$1" >/dev/null
+}
+mock_comments() { # <number>
+  python3 - "$MOCK_LOG" "$1" <<'PY'
+import json, sys
+for line in open(sys.argv[1]):
+    row = json.loads(line)
+    if "comment" in row and str(row.get("number")) == str(sys.argv[2]):
+        print(row["comment"])
+PY
+}
+mock_closed() { # <number>
+  python3 - "$MOCK_LOG" "$1" <<'PY'
+import json, sys
+for line in open(sys.argv[1]):
+    row = json.loads(line)
+    if row.get("closed") and str(row.get("number")) == str(sys.argv[2]):
+        print("closed")
+PY
+}
+
+printf 'T14 superseded PRs are closed after the newer PR merges\n'
+write_json "$BE_WORK/docs/generated/user-job-enums.json" 20 userjob
+commit_all "$BE_WORK" "backend v20 user-job-enums"
+git -C "$BE_WORK" push -q origin main
+beC_sha="$(git -C "$BE_WORK" rev-parse HEAD)"
+beC_sha8="${beC_sha:0:8}"
+rm -rf "$CLEAN_STATE"; mkdir -p "$CLEAN_STATE"
+: >"$MOCK_LOG"
+seed_prs '{"prs":[{"number":10,"ref":"auto/contract-sync-aaaaaaaa"},{"number":11,"ref":"auto/contract-sync-bbbbbbbb"}]}'
+rc=0
+cleanup_sync success || rc=$?
+out="$(cat "$LIVE_OUT")"
+assert_equal "T14 the merge succeeds" "0" "$rc"
+assert_contains "T14 merges the newer PR" "$out" "merged PR #1"
+assert_contains "T14 closes superseded A" "$out" "closing superseded PR #10"
+assert_contains "T14 closes superseded B" "$out" "closing superseded PR #11"
+assert_contains "T14 A comment names the newer sha" "$(mock_comments 10)" "$beC_sha8"
+assert_contains "T14 B comment names the newer sha" "$(mock_comments 11)" "$beC_sha8"
+assert_equal "T14 A is closed" "closed" "$(mock_closed 10)"
+assert_equal "T14 B is closed" "closed" "$(mock_closed 11)"
+assert_equal "T14 state advances after the merge" "$beC_sha" "$(clean_state_sha)"
+
+printf 'T15 a converged consumer closes an older open PR\n'
+# intent: regeneration with no diff means main already carries the newer
+# contracts, so any other open contract-sync PR is superseded.
+catch_consumer_up
+commit_all "$CONSUMER_WORK" "consumer catches up to v20"
+git -C "$CONSUMER_WORK" push -q origin main
+rm -rf "$CLEAN_STATE"; mkdir -p "$CLEAN_STATE"
+: >"$MOCK_LOG"
+seed_prs '{"prs":[{"number":11,"ref":"auto/contract-sync-bbbbbbbb"}]}'
+rc=0
+cleanup_sync success || rc=$?
+out="$(cat "$LIVE_OUT")"
+assert_equal "T15 a no-diff disposition succeeds" "0" "$rc"
+assert_contains "T15 reports no diff" "$out" "gen-agentic: no diff"
+assert_contains "T15 closes the older PR" "$out" "closing superseded PR #11"
+assert_contains "T15 comment says main already in sync" "$(mock_comments 11)" "main already in sync"
+assert_equal "T15 the older PR is closed" "closed" "$(mock_closed 11)"
+assert_equal "T15 state advances after no diff" "$beC_sha" "$(clean_state_sha)"
+
+printf 'T16 a red check keeps the state and is retried\n'
+write_json "$BE_WORK/docs/generated/user-job-enums.json" 21 userjob
+commit_all "$BE_WORK" "backend v21 user-job-enums"
+git -C "$BE_WORK" push -q origin main
+beD_sha="$(git -C "$BE_WORK" rev-parse HEAD)"
+rm -rf "$CLEAN_STATE"; mkdir -p "$CLEAN_STATE"
+: >"$MOCK_LOG"
+seed_prs '{"prs":[]}'
+rc=0
+cleanup_sync failure || rc=$?
+out="$(cat "$LIVE_OUT")"
+assert_equal "T16 a red PR is not a success" "1" "$rc"
+assert_contains "T16 leaves the red PR open" "$out" "leaving PR #1 open"
+assert_empty "T16 red does not advance the state" "$(clean_state_sha)"
+rc=0
+cleanup_sync success || rc=$?
+out="$(cat "$LIVE_OUT")"
+assert_equal "T16 the next tick succeeds" "0" "$rc"
+assert_contains "T16 the next tick revisits the PR" "$out" "re-checking it"
+assert_contains "T16 the next tick merges" "$out" "merged PR #1"
+assert_equal "T16 state advances after the merge" "$beD_sha" "$(clean_state_sha)"
+
+printf 'T17 a rebase conflict closes the PR and regenerates fresh next tick\n'
+write_json "$BE_WORK/docs/generated/user-job-enums.json" 22 userjob
+commit_all "$BE_WORK" "backend v22 user-job-enums"
+git -C "$BE_WORK" push -q origin main
+beE_sha="$(git -C "$BE_WORK" rev-parse HEAD)"
+beE_sha8="${beE_sha:0:8}"
+rm -rf "$CLEAN_STATE"; mkdir -p "$CLEAN_STATE"
+: >"$MOCK_LOG"
+seed_prs '{"prs":[]}'
+rc=0
+cleanup_sync conflict || rc=$?
+out="$(cat "$LIVE_OUT")"
+assert_equal "T17 a rebase conflict is not a success" "1" "$rc"
+assert_contains "T17 closes the conflicting PR" "$out" "closed it and dropped the branch"
+assert_contains "T17 comments the conflict" "$(mock_comments 1)" "conflicts with main"
+assert_equal "T17 the PR is closed" "closed" "$(mock_closed 1)"
+assert_empty "T17 state did not advance" "$(clean_state_sha)"
+assert_equal "T17 the conflicting branch was dropped" "0" \
+  "$(git -C "$CONSUMER_BARE" show-ref --verify --quiet "refs/heads/auto/contract-sync-$beE_sha8" && echo 1 || echo 0)"
+rc=0
+cleanup_sync success || rc=$?
+out="$(cat "$LIVE_OUT")"
+assert_equal "T17 the next tick succeeds" "0" "$rc"
+assert_contains "T17 the next tick opens a fresh PR" "$out" "PR #1 opened"
+assert_contains "T17 a fresh branch from main exists" "$(auto_branches "$CONSUMER_BARE")" \
+  "auto/contract-sync-$beE_sha8"
+assert_equal "T17 state advances after the fresh merge" "$beE_sha" "$(clean_state_sha)"
 
 # -----------------------------------------------------------------------------
 # T6 — the token value has exactly one home: a curl header argument.
