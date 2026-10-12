@@ -20,10 +20,11 @@ if [ -z "${QA_PYTEST_ON_RUNNER:-}" ] && ip -o -4 addr show 2>/dev/null | grep -q
 
 # QA_PG owns an offline database and its lifetime on the execution host (GEN-9846).
 pg_remove() {
-  local run=$1 kind ids all
+  local run=$1 kind ids all owner_filter=()
+  if [ -n "${2:-}" ]; then owner_filter=(--filter "label=qa-pytest.owner=$2"); fi
   for kind in container network volume; do
     all=(); if [ "$kind" = container ]; then all=(-a); fi
-    ids=$(docker "$kind" ls -q "${all[@]}" --filter "label=qa-pytest.run=$run" 2>/dev/null) || continue
+    ids=$(docker "$kind" ls -q "${all[@]}" --filter "label=qa-pytest.run=$run" "${owner_filter[@]}" 2>/dev/null) || continue
     if [ -n "$ids" ]; then
       if [ "$kind" = container ]; then docker rm -f $ids >/dev/null 2>&1 || true
       else docker "$kind" rm $ids >/dev/null 2>&1 || true; fi
@@ -46,9 +47,9 @@ pg_sweep() {
 pg_cleanup() {
   trap '' INT TERM
   if [ -n "${watchdog:-}" ]; then kill "$watchdog" 2>/dev/null || true; wait "$watchdog" 2>/dev/null || true; fi
-  pg_remove "$QA_PG_RUN_ID"
+  pg_remove "$QA_PG_RUN_ID" "$QA_PG_OWNER_ID"
   if [ "$remote_active" = 1 ]; then
-    timeout 15 ssh -o BatchMode=yes -o ConnectTimeout=5 root@"$RUNNER" "$(declare -f pg_remove); pg_remove $(printf '%q' "$QA_PG_RUN_ID")" || true
+    timeout 15 ssh -o BatchMode=yes -o ConnectTimeout=5 root@"$RUNNER" "$(declare -f pg_remove); pg_remove $(printf '%q' "$QA_PG_RUN_ID") $(printf '%q' "$QA_PG_OWNER_ID")" || true
   fi
   if [ -n "${run_pid:-}" ]; then kill "$run_pid" 2>/dev/null || true; wait "$run_pid" 2>/dev/null || true; fi
 }
@@ -58,6 +59,9 @@ if [ "${QA_PG:-0}" = 1 ]; then
   # A live run owns its resource names; duplicate callers cannot clean them up (GEN-9846).
   exec 8>"$lockdir/run-$QA_PG_RUN_ID"
   flock -n 8 || { echo 'qa-pytest: run id already active' >&2; exit 75; }
+  # Proxy cleanup owns only resources admitted by this invocation, even when the runner refuses (GEN-9846).
+  QA_PG_OWNER_ID=${QA_PG_OWNER_ID:-$(cat /proc/sys/kernel/random/uuid)}
+  [[ "$QA_PG_OWNER_ID" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || { echo 'qa-pytest: invalid owner id' >&2; exit 75; }
   remote_active=0
   trap pg_cleanup EXIT
   trap 'exit 130' INT
@@ -73,7 +77,7 @@ if [ "${QA_PG:-0}" = 1 ]; then
 fi
 pg_run() {
   local pg=qa-pytest-$QA_PG_RUN_ID-pg net=qa-pytest-$QA_PG_RUN_ID-net vol=qa-pytest-$QA_PG_RUN_ID-socket
-  local labels=(--label "qa-pytest.run=$QA_PG_RUN_ID" --label "qa-pytest.lane=$dir" --label "qa-pytest.pid=$$")
+  local labels=(--label "qa-pytest.run=$QA_PG_RUN_ID" --label "qa-pytest.owner=$QA_PG_OWNER_ID" --label "qa-pytest.lane=$dir" --label "qa-pytest.pid=$$")
   docker network create --internal "${labels[@]}" "$net" >/dev/null
   docker volume create "${labels[@]}" "$vol" >/dev/null
   docker run -d --name "$pg" "${labels[@]}" --label qa-pytest.role=pg --label qa-pg=1 \
@@ -118,7 +122,7 @@ remote_run() {
   echo "qa-pytest: running on lane runner $RUNNER" >&2
   # A dropped runner connection must fail the run, never hang the lane: keepalive plus a hard cap.
   local command
-  command=$(printf '%q ' env "QA_PYTEST_ON_RUNNER=1" "QA_PYTEST_LOCKDIR=$lockdir" "QA_PG=${QA_PG:-0}" "QA_PG_IMAGE=${QA_PG_IMAGE:-postgres:16}" "QA_PG_RUN_ID=${QA_PG_RUN_ID:-}" "QA_PG_READY_TIMEOUT=${QA_PG_READY_TIMEOUT:-60}" "PYTEST_ENV_FILE=${PYTEST_ENV_FILE:-}" "QA_PYTEST_NETWORK=${QA_PYTEST_NETWORK:-none}" "PYTEST_IMAGE=$img" "PYTEST_MODULE=${PYTEST_MODULE:-pytest}" "${QA_PYTEST_REMOTE_BIN:-qa-pytest}" "$dir" "$@")
+  command=$(printf '%q ' env "QA_PYTEST_ON_RUNNER=1" "QA_PYTEST_LOCKDIR=$lockdir" "QA_PG=${QA_PG:-0}" "QA_PG_IMAGE=${QA_PG_IMAGE:-postgres:16}" "QA_PG_RUN_ID=${QA_PG_RUN_ID:-}" "QA_PG_OWNER_ID=${QA_PG_OWNER_ID:-}" "QA_PG_READY_TIMEOUT=${QA_PG_READY_TIMEOUT:-60}" "PYTEST_ENV_FILE=${PYTEST_ENV_FILE:-}" "QA_PYTEST_NETWORK=${QA_PYTEST_NETWORK:-none}" "PYTEST_IMAGE=$img" "PYTEST_MODULE=${PYTEST_MODULE:-pytest}" "${QA_PYTEST_REMOTE_BIN:-qa-pytest}" "$dir" "$@")
   timeout 5400 ssh -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=4 root@"$RUNNER" "$command" & run_pid=$!
   wait "$run_pid" || rc=$?
   run_pid=
