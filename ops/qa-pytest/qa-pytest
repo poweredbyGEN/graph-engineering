@@ -150,7 +150,12 @@ remote_run() {
   echo "qa-pytest: running on lane runner $RUNNER" >&2
   echo run >&"$remote_in"
   while IFS= read -r ready <&"$remote_out"; do
-    [ "$ready" != "completed-$marker" ] || break
+    # Completion can share the final output line; strip it and finish framing that line (GEN-9971).
+    if [[ "$ready" == *"completed-$marker" ]]; then
+      ready=${ready%"completed-$marker"}
+      if [ -n "$ready" ]; then printf '%s\n' "$ready"; fi
+      break
+    fi
     printf '%s\n' "$ready"
   done
   rsync -a root@$RUNNER:"$dir/" "$dir/" || true
