@@ -1,0 +1,157 @@
+#!/bin/bash
+# qa-pytest <worktree-dir> <pytest args...>
+# QA_PYTEST_NETWORK selects the docker network mode (default none). The release
+# preflight sets bridge only for a step whose offline failure CI does not show
+# (GEN-9456); lane runs stay offline.
+# Runs gen-agentic tests for a lane in the QA image. One script serves both boxes.
+# qa-deploy-box: slots 1-3 are always available; slots 4-6 open only while the
+# 1-minute load is under 12 (16 cores): CI agents and staging share this box, and
+# uncapped lane runs slowed CI ~11x. Lane runner (QA_PYTEST_ON_RUNNER=1): slots 1-4
+# are always available; slots 5-8 open only while the load is under 12 and 16 GB
+# is free.
+set -euo pipefail
+dir=${1:?usage: qa-pytest <dir> <pytest args...>}; shift
+dir=$(realpath -m "$dir")
+docker_options=()
+if [ -n "${PYTEST_ENV_FILE:-}" ]; then docker_options+=(--env-file "$PYTEST_ENV_FILE"); fi
+lockdir=${QA_PYTEST_LOCKDIR:-/run/qa-pytest}; mkdir -p "$lockdir"
+# A run started on the lane runner itself stays there; forwarding would mirror the lane onto itself.
+if [ -z "${QA_PYTEST_ON_RUNNER:-}" ] && ip -o -4 addr show 2>/dev/null | grep -q " ${QA_LANE_RUNNER:-100.116.155.101}/"; then QA_PYTEST_ON_RUNNER=1; fi
+
+# QA_PG owns an offline database and its lifetime on the execution host (GEN-9846).
+pg_remove() {
+  local run=$1 kind ids all owner_filter=()
+  if [ -n "${2:-}" ]; then owner_filter=(--filter "label=qa-pytest.owner=$2"); fi
+  for kind in container network volume; do
+    all=(); if [ "$kind" = container ]; then all=(-a); fi
+    ids=$(docker "$kind" ls -q "${all[@]}" --filter "label=qa-pytest.run=$run" "${owner_filter[@]}" 2>/dev/null) || continue
+    if [ -n "$ids" ]; then
+      if [ "$kind" = container ]; then docker rm -f $ids >/dev/null 2>&1 || true
+      else docker "$kind" rm $ids >/dev/null 2>&1 || true; fi
+    fi
+  done
+}
+pg_sweep() {
+  local kind item owner run all field metadata
+  for kind in container network volume; do
+    all=(); field=.Labels
+    if [ "$kind" = container ]; then all=(-a); field=.Config.Labels; fi
+    for item in $(docker "$kind" ls -q --filter label=qa-pytest.run "${all[@]}"); do
+      metadata=$(docker "$kind" inspect -f "{{index $field \"qa-pytest.pid\"}} {{index $field \"qa-pytest.run\"}}" "$item" 2>/dev/null) || continue
+      read -r owner run <<< "$metadata"
+      [[ "$owner" =~ ^[0-9]+$ ]] || continue
+      if ! kill -0 "$owner" 2>/dev/null; then pg_remove "$run"; fi
+    done
+  done
+}
+pg_cleanup() {
+  trap '' INT TERM
+  if [ -n "${watchdog:-}" ]; then kill "$watchdog" 2>/dev/null || true; wait "$watchdog" 2>/dev/null || true; fi
+  pg_remove "$QA_PG_RUN_ID" "$QA_PG_OWNER_ID"
+  if [ "$remote_active" = 1 ]; then
+    timeout 15 ssh -o BatchMode=yes -o ConnectTimeout=5 root@"$RUNNER" "$(declare -f pg_remove); pg_remove $(printf '%q' "$QA_PG_RUN_ID") $(printf '%q' "$QA_PG_OWNER_ID")" || true
+  fi
+  if [ -n "${run_pid:-}" ]; then kill "$run_pid" 2>/dev/null || true; wait "$run_pid" 2>/dev/null || true; fi
+}
+if [ "${QA_PG:-0}" = 1 ]; then
+  QA_PG_RUN_ID=${QA_PG_RUN_ID:-$(date +%s)-$$-$RANDOM}
+  [[ "$QA_PG_RUN_ID" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || { echo 'qa-pytest: invalid run id' >&2; exit 75; }
+  # A live run owns its resource names; duplicate callers cannot clean them up (GEN-9846).
+  exec 8>"$lockdir/run-$QA_PG_RUN_ID"
+  flock -n 8 || { echo 'qa-pytest: run id already active' >&2; exit 75; }
+  # Proxy cleanup owns only resources admitted by this invocation, even when the runner refuses (GEN-9846).
+  QA_PG_OWNER_ID=${QA_PG_OWNER_ID:-$(cat /proc/sys/kernel/random/uuid)}
+  [[ "$QA_PG_OWNER_ID" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || { echo 'qa-pytest: invalid owner id' >&2; exit 75; }
+  remote_active=0
+  trap pg_cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  # The timer also stops foreground setup commands so they cannot defer the deadline.
+  ( trap - EXIT; sleep 5400 & timer=$!; trap 'kill "$timer" 2>/dev/null; exit' TERM INT
+    wait "$timer"
+    read -r -a children < /proc/$$/task/$$/children || true
+    for child in "${children[@]}"; do [ "$child" = "$BASHPID" ] || kill -TERM "$child" 2>/dev/null || true; done
+    kill -TERM "$$"
+  ) & watchdog=$!
+  pg_sweep
+fi
+pg_run() {
+  local pg=qa-pytest-$QA_PG_RUN_ID-pg net=qa-pytest-$QA_PG_RUN_ID-net vol=qa-pytest-$QA_PG_RUN_ID-socket
+  local labels=(--label "qa-pytest.run=$QA_PG_RUN_ID" --label "qa-pytest.owner=$QA_PG_OWNER_ID" --label "qa-pytest.lane=$dir" --label "qa-pytest.pid=$$")
+  docker network create --internal "${labels[@]}" "$net" >/dev/null
+  docker volume create "${labels[@]}" "$vol" >/dev/null
+  docker run -d --name "$pg" "${labels[@]}" --label qa-pytest.role=pg --label qa-pg=1 \
+    --network "$net" -v "$vol":/var/run/postgresql \
+    -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=gen_agentic_test "${QA_PG_IMAGE:-postgres:16}" >/dev/null || { echo 'qa-pytest: postgres not ready' >&2; return 75; }
+  local ready=0 deadline=$((SECONDS + ${QA_PG_READY_TIMEOUT:-60}))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    [ "$(docker inspect -f '{{.State.Running}}' "$pg" 2>/dev/null)" = true ] || break
+    if docker exec "$pg" pg_isready -h /var/run/postgresql >/dev/null 2>&1; then ready=1; break; fi
+    sleep 1
+  done
+  if [ "$ready" = 0 ]; then echo 'qa-pytest: postgres not ready' >&2; return 75; fi
+  docker run --rm --name "qa-pytest-$QA_PG_RUN_ID-test" "${labels[@]}" --label qa-pytest.role=test \
+    --network "$net" --cpus 4 --memory 6g "${docker_options[@]}" \
+    -v "$dir":/work "${deps_mount[@]}" -v "$vol":/work/.pg -w /work \
+    -e TEST_DB_HOST=/work/.pg -e TEST_DB_PORT=5432 -e TEST_DB_NAME=gen_agentic_test -e TEST_DB_USER=postgres -e TEST_DB_PASSWORD=postgres \
+    -e POSTGRES_HOST=/work/.pg -e POSTGRES_PORT=5432 -e POSTGRES_DB=gen_agentic_test -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres \
+    -e PGHOST=/work/.pg -e PGPORT=5432 -e PGDATABASE=gen_agentic_test -e PGUSER=postgres -e PGPASSWORD=postgres \
+    -e PYTHONPATH=/work/src${deps_path} "${PYTEST_IMAGE:-root-gen8396-qa:7b26687d}" python -m "${PYTEST_MODULE:-pytest}" "$@" & run_pid=$!
+  local rc=0
+  wait "$run_pid" || rc=$?
+  run_pid=
+  return "$rc"
+}
+
+# Lanes run on the dedicated lane runner (up to 8 slots x 4 CPUs). Legacy socket
+# dirs depend on a local Postgres; QA_PG supplies the database on either host.
+RUNNER=${QA_LANE_RUNNER:-100.116.155.101}
+remote_run() {
+  local rc=0 img=${PYTEST_IMAGE:-root-gen8396-qa:7b26687d}
+  # rsync --delete mirrors the lane at the same absolute path. Only /mnt/data
+  # lane dirs are mirrored; other paths can erase the runner home.
+  case "$dir" in /mnt/data/?*) ;; *) return 1 ;; esac
+  ssh -o BatchMode=yes -o ConnectTimeout=5 root@$RUNNER true 2>/dev/null || return 1
+  if [ "${QA_PG:-0}" = 1 ]; then remote_active=1; fi
+  rsync -a --delete "$dir/" root@$RUNNER:"$dir/" || return 1
+  if [ -n "${PYTEST_ENV_FILE:-}" ]; then rsync -a "$PYTEST_ENV_FILE" root@$RUNNER:"$PYTEST_ENV_FILE" || return 1; fi
+  ssh root@$RUNNER "docker image inspect $(printf '%q' "$img") >/dev/null 2>&1" || docker save "$img" | ssh root@$RUNNER docker load >/dev/null || return 1
+  if [ "${QA_PG:-0}" = 1 ]; then
+    ssh root@"$RUNNER" "docker image inspect $(printf '%q' "${QA_PG_IMAGE:-postgres:16}") >/dev/null 2>&1" || docker save "${QA_PG_IMAGE:-postgres:16}" | ssh root@"$RUNNER" docker load >/dev/null || return 1
+  fi
+  echo "qa-pytest: running on lane runner $RUNNER" >&2
+  # A dropped runner connection must fail the run, never hang the lane: keepalive plus a hard cap.
+  local command
+  command=$(printf '%q ' env "QA_PYTEST_ON_RUNNER=1" "QA_PYTEST_LOCKDIR=$lockdir" "QA_PG=${QA_PG:-0}" "QA_PG_IMAGE=${QA_PG_IMAGE:-postgres:16}" "QA_PG_RUN_ID=${QA_PG_RUN_ID:-}" "QA_PG_OWNER_ID=${QA_PG_OWNER_ID:-}" "QA_PG_READY_TIMEOUT=${QA_PG_READY_TIMEOUT:-60}" "PYTEST_ENV_FILE=${PYTEST_ENV_FILE:-}" "QA_PYTEST_NETWORK=${QA_PYTEST_NETWORK:-none}" "PYTEST_IMAGE=$img" "PYTEST_MODULE=${PYTEST_MODULE:-pytest}" "${QA_PYTEST_REMOTE_BIN:-qa-pytest}" "$dir" "$@")
+  timeout 5400 ssh -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=4 root@"$RUNNER" "$command" & run_pid=$!
+  wait "$run_pid" || rc=$?
+  run_pid=
+  # Test outputs written on the runner come back to the lane dir.
+  rsync -a root@$RUNNER:"$dir/" "$dir/" || true
+  exit $rc
+}
+# QA_PG bypasses legacy socket detection because the database follows the run.
+if [ "${QA_PYTEST_ON_RUNNER:-0}" != 1 ] && { [ "${QA_PG:-0}" = 1 ] || [ -z "$(find "$dir" -maxdepth 3 -type s -print -quit 2>/dev/null)" ]; }; then remote_run "$@" || true; fi
+# The shared /deps holds gen-agentic (py3.11) wheels; mcp-cifix-qa (py3.12) and limitless-data-ci (py3.10) images bundle their own deps.
+case "${PYTEST_IMAGE:-root-gen8396-qa:7b26687d}" in mcp-cifix-qa*|limitless-data-ci*) deps_mount=(); deps_path="" ;; *) deps_mount=(-v /mnt/data/qa-lanes/release1-01a10810/deps:/deps); deps_path=":/deps" ;; esac
+slots=(1 2 3 4 5 6) always=3
+if [ "${QA_PYTEST_ON_RUNNER:-0}" = 1 ]; then slots=(1 2 3 4 5 6 7 8) always=4; fi
+for try in $(seq 1 720); do
+  for slot in "${slots[@]}"; do
+    if [ "$slot" -gt "$always" ] && { [ "$(cut -d. -f1 /proc/loadavg)" -ge 12 ] ||
+      { [ "${QA_PYTEST_ON_RUNNER:-0}" = 1 ] && [ "$(awk '/MemAvailable/{print int($2/1048576)}' /proc/meminfo)" -lt 16 ]; }; }; then break; fi
+    exec 9>"$lockdir/slot$slot"
+    if flock -n 9; then
+      if [ "${QA_PG:-0}" = 1 ]; then
+        pg_run "$@"
+        exit $?
+      fi
+      exec docker run --rm --network "${QA_PYTEST_NETWORK:-none}" --cpus 4 --memory 6g \
+        "${docker_options[@]}" -v "$dir":/work ${deps_mount[@]} -w /work \
+        -e PYTHONPATH=/work/src${deps_path} "${PYTEST_IMAGE:-root-gen8396-qa:7b26687d}" python -m "${PYTEST_MODULE:-pytest}" "$@"
+    fi
+  done
+  [ "$try" = 1 ] && echo "qa-pytest: all slots busy or load high, waiting" >&2
+  sleep 5
+done
+echo "qa-pytest: no slot free after 60 min" >&2; exit 75
