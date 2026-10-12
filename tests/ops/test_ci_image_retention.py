@@ -25,7 +25,7 @@ import os
 import subprocess
 import tempfile
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -100,7 +100,7 @@ def _run_prune(refs: tuple[str, ...]) -> Counter:
             ""
         )  # created up front so a fully-protected set yields an empty Counter
 
-        created = (datetime.now(timezone.utc) - timedelta(hours=100)).strftime(
+        created = (datetime.now(UTC) - timedelta(hours=100)).strftime(
             "%Y-%m-%d"
         )
         images_file.write_text(
