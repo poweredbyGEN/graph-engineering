@@ -15,6 +15,21 @@ dir=$(realpath -m "$dir")
 docker_options=()
 if [ -n "${PYTEST_ENV_FILE:-}" ]; then docker_options+=(--env-file "$PYTEST_ENV_FILE"); fi
 lockdir=${QA_PYTEST_LOCKDIR:-/run/qa-pytest}; mkdir -p "$lockdir"
+lane_claim() {
+  local lane_lock=$lockdir/lane-$(printf '%s' "$dir" | sha256sum | cut -d' ' -f1)
+  # The proxy's runner session passes its held descriptor to the runner call (GEN-9854).
+  if ! [ /proc/$$/fd/7 -ef "$lane_lock" ]; then exec 7>"$lane_lock"; fi
+  flock -n 7 || { echo 'qa-pytest: lane directory already active' >&2; exit 75; }
+}
+lane_claim
+cleanup() {
+  if [ "${QA_PG:-0}" = 1 ] && [ -n "${remote_active:-}" ]; then pg_cleanup; fi
+  if [ -n "${remote_in:-}" ]; then exec {remote_in}>&-; fi
+  if [ -n "${run_pid:-}" ]; then kill "$run_pid" 2>/dev/null || true; wait "$run_pid" 2>/dev/null || true; fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 # A run started on the lane runner itself stays there; forwarding would mirror the lane onto itself.
 if [ -z "${QA_PYTEST_ON_RUNNER:-}" ] && ip -o -4 addr show 2>/dev/null | grep -q " ${QA_LANE_RUNNER:-100.116.155.101}/"; then QA_PYTEST_ON_RUNNER=1; fi
 
@@ -63,9 +78,6 @@ if [ "${QA_PG:-0}" = 1 ]; then
   QA_PG_OWNER_ID=${QA_PG_OWNER_ID:-$(cat /proc/sys/kernel/random/uuid)}
   [[ "$QA_PG_OWNER_ID" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || { echo 'qa-pytest: invalid owner id' >&2; exit 75; }
   remote_active=0
-  trap pg_cleanup EXIT
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
   # The timer also stops foreground setup commands so they cannot defer the deadline.
   ( trap - EXIT; sleep 5400 & timer=$!; trap 'kill "$timer" 2>/dev/null; exit' TERM INT
     wait "$timer"
@@ -113,21 +125,38 @@ remote_run() {
   case "$dir" in /mnt/data/?*) ;; *) return 1 ;; esac
   ssh -o BatchMode=yes -o ConnectTimeout=5 root@$RUNNER true 2>/dev/null || return 1
   if [ "${QA_PG:-0}" = 1 ]; then remote_active=1; fi
-  rsync -a --delete "$dir/" root@$RUNNER:"$dir/" || return 1
-  if [ -n "${PYTEST_ENV_FILE:-}" ]; then rsync -a "$PYTEST_ENV_FILE" root@$RUNNER:"$PYTEST_ENV_FILE" || return 1; fi
-  ssh root@$RUNNER "docker image inspect $(printf '%q' "$img") >/dev/null 2>&1" || docker save "$img" | ssh root@$RUNNER docker load >/dev/null || return 1
-  if [ "${QA_PG:-0}" = 1 ]; then
-    ssh root@"$RUNNER" "docker image inspect $(printf '%q' "${QA_PG_IMAGE:-postgres:16}") >/dev/null 2>&1" || docker save "${QA_PG_IMAGE:-postgres:16}" | ssh root@"$RUNNER" docker load >/dev/null || return 1
-  fi
-  echo "qa-pytest: running on lane runner $RUNNER" >&2
   # A dropped runner connection must fail the run, never hang the lane: keepalive plus a hard cap.
   local command
   command=$(printf '%q ' env "QA_PYTEST_ON_RUNNER=1" "QA_PYTEST_LOCKDIR=$lockdir" "QA_PG=${QA_PG:-0}" "QA_PG_IMAGE=${QA_PG_IMAGE:-postgres:16}" "QA_PG_RUN_ID=${QA_PG_RUN_ID:-}" "QA_PG_OWNER_ID=${QA_PG_OWNER_ID:-}" "QA_PG_READY_TIMEOUT=${QA_PG_READY_TIMEOUT:-60}" "PYTEST_ENV_FILE=${PYTEST_ENV_FILE:-}" "QA_PYTEST_NETWORK=${QA_PYTEST_NETWORK:-none}" "PYTEST_IMAGE=$img" "PYTEST_MODULE=${PYTEST_MODULE:-pytest}" "${QA_PYTEST_REMOTE_BIN:-qa-pytest}" "$dir" "$@")
-  timeout 5400 ssh -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=4 root@"$RUNNER" "$command" & run_pid=$!
+  # Runner admission covers rsync, execution and copyback; direct calls use the same lock (GEN-9854).
+  local admission ready remote_out marker
+  marker=$(cat /proc/sys/kernel/random/uuid)
+  admission="$(declare -f lane_claim); dir=$(printf '%q' "$dir"); lockdir=$(printf '%q' "$lockdir"); mkdir -p \"\$lockdir\"; lane_claim; echo admitted-$marker; read -r || exit 75; $command </dev/null; rc=\$?; echo completed-$marker; read -r; exit \$rc"
+  coproc REMOTE { exec timeout 5400 ssh -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=4 root@"$RUNNER" "$admission"; }
+  run_pid=$REMOTE_PID
+  exec {remote_in}>&"${REMOTE[1]}" {remote_out}<&"${REMOTE[0]}"
+  if ! read -r ready <&"$remote_out" || [ "$ready" != "admitted-$marker" ]; then
+    wait "$run_pid" || rc=$?
+    run_pid=
+    [ "$rc" != 0 ] || rc=75
+    exit "$rc"
+  fi
+  rsync -a --delete "$dir/" root@$RUNNER:"$dir/" || exit 75
+  if [ -n "${PYTEST_ENV_FILE:-}" ]; then rsync -a "$PYTEST_ENV_FILE" root@$RUNNER:"$PYTEST_ENV_FILE" || exit 75; fi
+  ssh root@$RUNNER "docker image inspect $(printf '%q' "$img") >/dev/null 2>&1" || docker save "$img" | ssh root@$RUNNER docker load >/dev/null || exit 75
+  if [ "${QA_PG:-0}" = 1 ]; then
+    ssh root@"$RUNNER" "docker image inspect $(printf '%q' "${QA_PG_IMAGE:-postgres:16}") >/dev/null 2>&1" || docker save "${QA_PG_IMAGE:-postgres:16}" | ssh root@"$RUNNER" docker load >/dev/null || exit 75
+  fi
+  echo "qa-pytest: running on lane runner $RUNNER" >&2
+  echo run >&"$remote_in"
+  while IFS= read -r ready <&"$remote_out"; do
+    [ "$ready" != "completed-$marker" ] || break
+    printf '%s\n' "$ready"
+  done
+  rsync -a root@$RUNNER:"$dir/" "$dir/" || true
+  echo release >&"$remote_in"
   wait "$run_pid" || rc=$?
   run_pid=
-  # Test outputs written on the runner come back to the lane dir.
-  rsync -a root@$RUNNER:"$dir/" "$dir/" || true
   exit $rc
 }
 # QA_PG bypasses legacy socket detection because the database follows the run.
@@ -146,9 +175,12 @@ for try in $(seq 1 720); do
         pg_run "$@"
         exit $?
       fi
-      exec docker run --rm --network "${QA_PYTEST_NETWORK:-none}" --cpus 4 --memory 6g \
+      docker run --rm --network "${QA_PYTEST_NETWORK:-none}" --cpus 4 --memory 6g \
         "${docker_options[@]}" -v "$dir":/work ${deps_mount[@]} -w /work \
-        -e PYTHONPATH=/work/src${deps_path} "${PYTEST_IMAGE:-root-gen8396-qa:7b26687d}" python -m "${PYTEST_MODULE:-pytest}" "$@"
+        -e PYTHONPATH=/work/src${deps_path} "${PYTEST_IMAGE:-root-gen8396-qa:7b26687d}" python -m "${PYTEST_MODULE:-pytest}" "$@" & run_pid=$!
+      wait "$run_pid"
+      run_pid=
+      exit 0
     fi
   done
   [ "$try" = 1 ] && echo "qa-pytest: all slots busy or load high, waiting" >&2
