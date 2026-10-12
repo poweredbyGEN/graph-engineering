@@ -100,9 +100,7 @@ def _run_prune(refs: tuple[str, ...]) -> Counter:
             ""
         )  # created up front so a fully-protected set yields an empty Counter
 
-        created = (datetime.now(UTC) - timedelta(hours=100)).strftime(
-            "%Y-%m-%d"
-        )
+        created = (datetime.now(UTC) - timedelta(hours=100)).strftime("%Y-%m-%d")
         images_file.write_text(
             "".join(f"{ref} sha256:fake {created}\n" for ref in refs)
         )
