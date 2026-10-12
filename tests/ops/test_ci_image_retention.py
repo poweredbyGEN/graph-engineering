@@ -176,7 +176,6 @@ def _run_prune(refs: tuple[str, ...]) -> Counter:
         return Counter(rmi_log.read_text().splitlines())
 
 
-@_contract_xfail
 def test_t1_ci_image_tags_are_kept_with_zero_rmi():
     # intent: locally built CI images (pull: false, no registry) must survive the age
     # prune; without the *-ci:* / *-ci-*:* keep patterns the loop issues `docker rmi`
@@ -187,7 +186,6 @@ def test_t1_ci_image_tags_are_kept_with_zero_rmi():
     assert sum(rmi.values()) == 0, f"expected zero rmi, got {dict(rmi)}"
 
 
-@_contract_xfail
 def test_t2_qa_cifix_kept_and_unprotected_removed_exactly_once():
     # intent: the pre-existing *-qa* / *cifix* protections stay, and exactly the four
     # stale unmatched tags are removed once each; protecting every image or dropping
@@ -200,7 +198,6 @@ def test_t2_qa_cifix_kept_and_unprotected_removed_exactly_once():
     assert sorted(rmi) == sorted(UNPROTECTED_REFS), f"unexpected rmi set: {dict(rmi)}"
 
 
-@_contract_xfail
 def test_t3_script_passes_bash_syntax_check():
     # intent: the committed script must be valid bash; a broken case statement (missing
     # esac) or any other syntax error must fail the syntax check before installation.
@@ -209,7 +206,6 @@ def test_t3_script_passes_bash_syntax_check():
     assert proc.returncode == 0, f"bash -n failed: {proc.stderr}"
 
 
-@_contract_xfail
 def test_t3_missing_esac_fails_syntax_check():
     # intent: sabotage — deleting the closing esac must make bash -n fail, proving the
     # syntax gate is a real check and not a no-op.
