@@ -96,31 +96,37 @@ def _run_prune(refs: tuple[str, ...]) -> Counter:
         rmi_log = tmp / "rmi.log"
         images_file = tmp / "images.txt"
         in_use_file = tmp / "in_use.txt"
-        rmi_log.write_text("")  # created up front so a fully-protected set yields an empty Counter
+        rmi_log.write_text(
+            ""
+        )  # created up front so a fully-protected set yields an empty Counter
 
-        created = (datetime.now(timezone.utc) - timedelta(hours=100)).strftime("%Y-%m-%d")
+        created = (datetime.now(timezone.utc) - timedelta(hours=100)).strftime(
+            "%Y-%m-%d"
+        )
         images_file.write_text(
             "".join(f"{ref} sha256:fake {created}\n" for ref in refs)
         )
-        in_use_file.write_text("")  # every ref is unused by any container per the contract
+        in_use_file.write_text(
+            ""
+        )  # every ref is unused by any container per the contract
 
         # Fake docker: record `docker rmi <ref>`, stub the read-only inventory calls so
         # no real docker daemon is contacted. `volume|image|builder` prune subcommands
         # report a no-op reclaim; the loop removes tagged images only via `rmi`.
         (bindir / "docker").write_text(
             "#!/bin/bash\n"
-            "case \"$1\" in\n"
-            "  images) cat \"$IMAGES_FILE\" ;;\n"
-            "  ps) cat \"$IN_USE_FILE\" ;;\n"
-            "  rmi) printf '%s\\n' \"$2\" >> \"$RMI_LOG\" ;;\n"
+            'case "$1" in\n'
+            '  images) cat "$IMAGES_FILE" ;;\n'
+            '  ps) cat "$IN_USE_FILE" ;;\n'
+            '  rmi) printf \'%s\\n\' "$2" >> "$RMI_LOG" ;;\n'
             "  volume|image|builder) echo 'Total reclaimed space: 0B' ;;\n"
-            "  *) echo \"fake docker: unexpected argv: $*\" >&2; exit 1 ;;\n"
+            '  *) echo "fake docker: unexpected argv: $*" >&2; exit 1 ;;\n'
             "esac\n"
         )
         # `df --output=pcent /` feeds the keep-window selection: 60% keeps the 72h window.
         (bindir / "df").write_text(
             "#!/bin/bash\n"
-            "if [ \"$1\" = --output=pcent ]; then\n"
+            'if [ "$1" = --output=pcent ]; then\n'
             "  echo '60%'\n"
             "else\n"
             "  echo 'Filesystem      Size  Used Avail Use% Mounted on'\n"
@@ -141,7 +147,7 @@ def _run_prune(refs: tuple[str, ...]) -> Counter:
         rewrote_log = False
         for i, line in enumerate(lines):
             if line.startswith("export PATH="):
-                lines[i] = f'export PATH="{bindir}:{line[len("export PATH="):]}"'
+                lines[i] = f'export PATH="{bindir}:{line[len("export PATH=") :]}"'
                 rewrote_path = True
             elif line.startswith("LOG="):
                 lines[i] = f"LOG={tmp / 'qa-docker-prune.log'}"
@@ -171,7 +177,9 @@ def _run_prune(refs: tuple[str, ...]) -> Counter:
             text=True,
             timeout=60,
         )
-        assert proc.returncode == 0, f"prune script exited {proc.returncode}: {proc.stderr}"
+        assert proc.returncode == 0, (
+            f"prune script exited {proc.returncode}: {proc.stderr}"
+        )
 
         return Counter(rmi_log.read_text().splitlines())
 
@@ -182,7 +190,9 @@ def test_t1_ci_image_tags_are_kept_with_zero_rmi():
     # for every one of them after 72h, which broke limitless-data pipelines (GEN-9831).
     rmi = _run_prune(PROTECTED_CI_REFS)
     for ref in PROTECTED_CI_REFS:
-        assert rmi[ref] == 0, f"protected CI image {ref} was queued for docker rmi {rmi[ref]}x"
+        assert rmi[ref] == 0, (
+            f"protected CI image {ref} was queued for docker rmi {rmi[ref]}x"
+        )
     assert sum(rmi.values()) == 0, f"expected zero rmi, got {dict(rmi)}"
 
 
@@ -192,9 +202,13 @@ def test_t2_qa_cifix_kept_and_unprotected_removed_exactly_once():
     # the qa/cifix patterns both fail this.
     rmi = _run_prune(PROTECTED_QA_CIFIX_REFS + UNPROTECTED_REFS)
     for ref in PROTECTED_QA_CIFIX_REFS:
-        assert rmi[ref] == 0, f"protected qa/cifix image {ref} was queued for docker rmi {rmi[ref]}x"
+        assert rmi[ref] == 0, (
+            f"protected qa/cifix image {ref} was queued for docker rmi {rmi[ref]}x"
+        )
     for ref in UNPROTECTED_REFS:
-        assert rmi[ref] == 1, f"stale unmatched image {ref} should be removed exactly once, got {rmi[ref]}"
+        assert rmi[ref] == 1, (
+            f"stale unmatched image {ref} should be removed exactly once, got {rmi[ref]}"
+        )
     assert sorted(rmi) == sorted(UNPROTECTED_REFS), f"unexpected rmi set: {dict(rmi)}"
 
 
@@ -211,9 +225,13 @@ def test_t3_missing_esac_fails_syntax_check():
     # syntax gate is a real check and not a no-op.
     script = _script_path()
     text = script.read_text()
-    assert "esac" in text, "committed script must contain an esac for this sabotage to be meaningful"
+    assert "esac" in text, (
+        "committed script must contain an esac for this sabotage to be meaningful"
+    )
     with tempfile.TemporaryDirectory() as td:
         sabotaged = Path(td) / "qa-docker-prune.sh"
         sabotaged.write_text(text.replace("esac", ""))
-        proc = subprocess.run(["bash", "-n", str(sabotaged)], capture_output=True, text=True)
+        proc = subprocess.run(
+            ["bash", "-n", str(sabotaged)], capture_output=True, text=True
+        )
         assert proc.returncode != 0, "bash -n should fail after removing esac"
