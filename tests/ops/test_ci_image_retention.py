@@ -176,6 +176,7 @@ def _run_prune(refs: tuple[str, ...]) -> Counter:
             capture_output=True,
             text=True,
             timeout=60,
+            check=False,
         )
         assert proc.returncode == 0, (
             f"prune script exited {proc.returncode}: {proc.stderr}"
@@ -216,7 +217,9 @@ def test_t3_script_passes_bash_syntax_check():
     # intent: the committed script must be valid bash; a broken case statement (missing
     # esac) or any other syntax error must fail the syntax check before installation.
     script = _script_path()
-    proc = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
+    proc = subprocess.run(
+        ["bash", "-n", str(script)], capture_output=True, text=True, check=False
+    )
     assert proc.returncode == 0, f"bash -n failed: {proc.stderr}"
 
 
@@ -232,6 +235,6 @@ def test_t3_missing_esac_fails_syntax_check():
         sabotaged = Path(td) / "qa-docker-prune.sh"
         sabotaged.write_text(text.replace("esac", ""))
         proc = subprocess.run(
-            ["bash", "-n", str(sabotaged)], capture_output=True, text=True
+            ["bash", "-n", str(sabotaged)], capture_output=True, text=True, check=False
         )
         assert proc.returncode != 0, "bash -n should fail after removing esac"
