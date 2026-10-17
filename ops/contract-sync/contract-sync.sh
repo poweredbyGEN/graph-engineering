@@ -55,6 +55,13 @@ GIT_TIMEOUT="${CONTRACT_SYNC_GIT_TIMEOUT:-300}"
 REGEN_TIMEOUT="${CONTRACT_SYNC_REGEN_TIMEOUT:-600}"
 AGENTIC_IMAGE="${CONTRACT_SYNC_AGENTIC_IMAGE:-git.gen.pro/gen/gen-agentic-ci:py311}"
 MCP_IMAGE="${CONTRACT_SYNC_MCP_IMAGE:-python:3.12-bookworm}"
+# Bounded history fetch on the merged-branch retry path. The evidence that a
+# merge is still in main needs real commits, but only a few: main moves by one
+# commit per sync, and the cap keeps a retry from becoming a history scan.
+MERGE_ANCESTRY_DEPTH="${CONTRACT_SYNC_MERGE_ANCESTRY_DEPTH:-50}"
+# The one generated artifact whose declared stamp cells the retry may disregard
+# (GEN-10539). Other consumers have no such mirror and keep the plain refusal.
+CATALOG_SHEET_PATH="src/gen_mcp_server/contracts/catalog-sheet.tsv"
 STATUS_POLL_INTERVAL="${CONTRACT_SYNC_STATUS_POLL_INTERVAL:-20}"
 STATUS_POLL_TIMEOUT="${CONTRACT_SYNC_STATUS_POLL_TIMEOUT:-900}"
 MAIN_PIPELINE_WAIT="${CONTRACT_SYNC_MAIN_PIPELINE_WAIT:-180}"
@@ -116,6 +123,10 @@ fi
 # prompt. git.gen.pro credentials come from the box's git credential helper, not
 # from the API token, which is only for the API calls below.
 export GIT_TERMINAL_PROMPT=0
+
+# Everything the script runs lives next to it, including the catalog-sheet
+# retry comparator.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 
 # -----------------------------------------------------------------------------
 # Logging. One line per event on stdout, which systemd forwards to journald.
@@ -648,6 +659,91 @@ merge_when_green() { # <repo> <number> <head-sha> <branch> — 0 merged, 11 retr
 }
 
 # -----------------------------------------------------------------------------
+# A retained branch whose PR already merged this exact input (GEN-10539).
+#
+# A retry after a sibling failure re-processes every consumer, including one
+# whose own PR merged on the earlier tick. That branch has no open PR, so the
+# plain rule would refuse it forever and the checkpoint would never advance.
+# The evidence that closes the gap is the merge itself: the PR for this exact
+# branch merged into the consumer branch, from this consumer's own repo, with
+# this run's backend and MCP provenance in its body, and the commit it merged
+# is still in main's history. Nothing else is accepted, and the only tolerated
+# regeneration difference is the catalog mirror's declared stamp cell.
+# -----------------------------------------------------------------------------
+
+merged_pr_evidence() { # <repo> <branch> <backend-sha> <mcp-sha> — "number<TAB>head"
+  local repo="$1" branch="$2" backend_sha="$3" mcp_sha="$4"
+  gitea_request GET "/repos/$GITEA_OWNER/$repo/pulls?state=all&limit=50" >"$PRS_FILE" || return 1
+  python3 - "$PRS_FILE" "$GITEA_OWNER/$repo" "$CONSUMER_BRANCH" "$branch" \
+    "$backend_sha" "$mcp_sha" <<'PY'
+import json, sys
+path, repo_full, base_ref, branch, backend_sha, mcp_sha = sys.argv[1:7]
+try:
+    pulls = json.load(open(path))
+except (OSError, ValueError):
+    raise SystemExit(1)
+provenance = {"Synced from gen-backend-v2 %s" % backend_sha}
+if mcp_sha:
+    provenance.add("Public MCP projection from gen-mcp-server %s" % mcp_sha)
+for pull in pulls if isinstance(pulls, list) else []:
+    head = pull.get("head") or {}
+    base = pull.get("base") or {}
+    if (head.get("ref") or "") != branch:
+        continue
+    if pull.get("state") != "closed" or pull.get("merged") is not True:
+        continue
+    if (base.get("ref") or "") != base_ref:
+        continue
+    if ((base.get("repo") or {}).get("full_name") or "") != repo_full:
+        continue
+    if ((head.get("repo") or {}).get("full_name") or "") != repo_full:
+        continue
+    lines = {line.strip().rstrip(".") for line in (pull.get("body") or "").splitlines()}
+    if not provenance <= lines:
+        continue
+    print("%s\t%s" % (pull.get("number"), head.get("sha") or ""))
+    break
+PY
+}
+
+# main's history must contain the merged commit. A shallow clone carries one
+# commit, so deepen by a capped number of commits instead of cloning history;
+# a fetch that cannot prove ancestry refuses.
+merged_head_is_in_main() { # <clone> <branch> <merged-sha>
+  local clone="$1" branch="$2" sha="$3"
+  if [ "$(git -C "$clone" rev-parse HEAD)" != "$sha" ]; then
+    timeout "$GIT_TIMEOUT" git -C "$clone" fetch --quiet --deepen="$MERGE_ANCESTRY_DEPTH" \
+      origin "+refs/heads/$CONSUMER_BRANCH:refs/remotes/origin/$CONSUMER_BRANCH" \
+      "+refs/heads/$branch:refs/remotes/origin/$branch" || return 1
+  fi
+  git -C "$clone" cat-file -e "$sha^{commit}" 2>/dev/null || return 1
+  git -C "$clone" merge-base --is-ancestor "$sha" HEAD
+}
+
+# True only for the catalog mirror retried after its own merge, where the whole
+# regenerated difference is the served_sha stamp the mirror declares. The
+# comparison is the consumer's own catalog_sheet parse/render, so a changed
+# cell, header, key, row count or extra file refuses here and the caller keeps
+# the plain refusal (zero remote writes either way).
+merged_retry_is_converged() { # <name> <clone> <branch> <backend-sha> <mcp-sha> <paths...>
+  local name="$1" clone="$2" branch="$3" backend_sha="$4" mcp_sha="$5"
+  shift 5
+  [ "$name" = "gen-mcp-server" ] || return 1
+  [ "$#" = "1" ] && [ "$1" = "$CATALOG_SHEET_PATH" ] || return 1
+  local evidence number merged_head current_head
+  # gen-mcp-server's regeneration and its PR body carry the backend provenance
+  # only; the MCP source never reaches this consumer.
+  evidence="$(merged_pr_evidence "$name" "$branch" "$backend_sha" "")" || return 1
+  number="${evidence%%$'\t'*}"
+  merged_head="${evidence#*$'\t'}"
+  [ -n "$number" ] && [ -n "$merged_head" ] || return 1
+  current_head="$(json_scalar <(gitea_request GET "/repos/$GITEA_OWNER/$name/branches/$branch" || true) "commit.id")"
+  [ -n "$current_head" ] && [ "$current_head" = "$merged_head" ] || return 1
+  merged_head_is_in_main "$clone" "$branch" "$merged_head" || return 1
+  python3 "$SCRIPT_DIR/catalog_sheet_retry_check.py" "$clone" "$CATALOG_SHEET_PATH"
+}
+
+# -----------------------------------------------------------------------------
 # One consumer: regenerate, and hand a diff off as a green-and-merged PR.
 # Returns 0 (nothing to do / merged / skipped), 11 (a PR is still open and is
 # re-checked next tick) or 1 (error, so the next tick retries instead of losing
@@ -730,6 +826,11 @@ process_consumer() { # <name> <backend-sha> <backend-clone> <mcp-sha> <mcp-clone
       log "$name: PR #$pr_number is already open for ${backend_sha:0:8}; re-checking it"
       merge_and_cleanup "$name" "$pr_number" "$head_sha" "$branch" "$backend_sha"
       return $?
+    fi
+    if merged_retry_is_converged "$name" "$clone" "$branch" "$backend_sha" "$mcp_sha" \
+      "${changed_paths[@]}"; then
+      log "$name: branch $branch merged this input already; the only regenerated difference is the declared catalog mirror stamp — nothing to sync"
+      return 0
     fi
     log "$name: ERROR branch $branch exists with no open PR; refusing to reuse it"
     return 1
