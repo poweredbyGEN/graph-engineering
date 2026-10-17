@@ -34,6 +34,12 @@ import pathlib
 import subprocess
 import sys
 
+# The consumer's own diff detection reads `git status`, so an interpreter cache
+# file next to the pinned module would surface as a changed generated path and
+# make every refusal host- and timing-dependent. Pin bytecode off before the
+# import so the regenerated tree holds only the artifacts the generator writes.
+sys.dont_write_bytecode = True
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import catalog_sheet_pinned as pinned  # noqa: E402
 
