@@ -707,14 +707,16 @@ PY
 }
 
 # main's history must contain the merged commit. A shallow clone carries one
-# commit, so deepen by a capped number of commits instead of cloning history;
-# a fetch that cannot prove ancestry refuses.
+# commit, so deepen by a capped number of commits instead of cloning history.
+# The deepen covers current main alone: adding the retained branch to the same
+# fetch lets git bound each tip separately and leaves the checked-out commit a
+# shallow root, where merge-base cannot reach the merge. A fetch that cannot
+# prove ancestry refuses (GEN-10539).
 merged_head_is_in_main() { # <clone> <branch> <merged-sha>
-  local clone="$1" branch="$2" sha="$3"
+  local clone="$1" sha="$3"
   if [ "$(git -C "$clone" rev-parse HEAD)" != "$sha" ]; then
     timeout "$GIT_TIMEOUT" git -C "$clone" fetch --quiet --deepen="$MERGE_ANCESTRY_DEPTH" \
-      origin "+refs/heads/$CONSUMER_BRANCH:refs/remotes/origin/$CONSUMER_BRANCH" \
-      "+refs/heads/$branch:refs/remotes/origin/$branch" || return 1
+      origin "+refs/heads/$CONSUMER_BRANCH:refs/remotes/origin/$CONSUMER_BRANCH" || return 1
   fi
   git -C "$clone" cat-file -e "$sha^{commit}" 2>/dev/null || return 1
   git -C "$clone" merge-base --is-ancestor "$sha" HEAD
