@@ -706,6 +706,8 @@ def test_t4_real_regenerated_change_refuses(fx, variant):
 
     run = fx.run_sync(CONSUMER)
 
+    expected = {SHEET_PATH} if variant == "enum-cell" else {SHEET_PATH, SIDECAR_PATH}
+    assert_clone_changed_paths(fx, expected)
     assert run.returncode == 1, run.stdout + run.stderr
     assert_real_refusal(run)
     fx.assert_no_writes(bare, before_refs, CONSUMER)
