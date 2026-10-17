@@ -720,6 +720,28 @@ merged_head_is_in_main() { # <clone> <branch> <merged-sha>
   git -C "$clone" merge-base --is-ancestor "$sha" HEAD
 }
 
+# The comparison runs the consumer's own catalog_sheet module. In a consumer
+# checkout that installs its package, `refresh_contracts.py` is also what makes
+# the module importable, so the comparison uses that same regeneration image and
+# invocation; a checkout whose catalogue is a standalone stdlib module needs no
+# runtime of its own. Neither run writes into the clone.
+catalog_sheet_retry_check() { # <consumer-clone> — 0 only declared stamps differ
+  local clone="$1"
+  if [ -f "$clone/scripts/refresh_contracts.py" ]; then
+    # shellcheck disable=SC2016  # $0 belongs to the inner sh, not this shell
+    timeout "$REGEN_TIMEOUT" docker run --rm --cpus 2 \
+      -v "$clone":/w -v "$SCRIPT_DIR/catalog_sheet_retry_check.py":/retry_check.py:ro \
+      -w /w "$MCP_IMAGE" sh -c \
+      'git config --global --add safe.directory "*" &&
+        pip install -q -e . >/dev/null 2>&1 &&
+        PYTHONDONTWRITEBYTECODE=1 python /retry_check.py /w "$0"' \
+      "$CATALOG_SHEET_PATH"
+    return $?
+  fi
+  PYTHONDONTWRITEBYTECODE=1 python3 "$SCRIPT_DIR/catalog_sheet_retry_check.py" \
+    "$clone" "$CATALOG_SHEET_PATH"
+}
+
 # True only for the catalog mirror retried after its own merge, where the whole
 # regenerated difference is the served_sha stamp the mirror declares. The
 # comparison is the consumer's own catalog_sheet parse/render, so a changed
@@ -740,7 +762,7 @@ merged_retry_is_converged() { # <name> <clone> <branch> <backend-sha> <mcp-sha> 
   current_head="$(json_scalar <(gitea_request GET "/repos/$GITEA_OWNER/$name/branches/$branch" || true) "commit.id")"
   [ -n "$current_head" ] && [ "$current_head" = "$merged_head" ] || return 1
   merged_head_is_in_main "$clone" "$branch" "$merged_head" || return 1
-  python3 "$SCRIPT_DIR/catalog_sheet_retry_check.py" "$clone" "$CATALOG_SHEET_PATH"
+  catalog_sheet_retry_check "$clone"
 }
 
 # -----------------------------------------------------------------------------
