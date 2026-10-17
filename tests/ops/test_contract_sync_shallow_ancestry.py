@@ -522,11 +522,6 @@ def assert_bounded_and_side_effect_free(
 # -----------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    raises=AssertionError,
-    strict=True,
-    reason="shipped two-ref relative deepen leaves current main a shallow root",
-)
 def test_t11_merged_head_is_proven_through_bounded_main_history(tmp_path: Path) -> None:
     """Nonlinear DAG, retained merged branch, depth-1 consumer clone, depth reaches it."""
     case = shallow_case(tmp_path)
@@ -545,11 +540,6 @@ def test_t11_merged_head_is_proven_through_bounded_main_history(tmp_path: Path) 
     assert_bounded_and_side_effect_free(case, proc)
 
 
-@pytest.mark.xfail(
-    raises=AssertionError,
-    strict=True,
-    reason="shipped two-ref relative deepen leaves current main a shallow root",
-)
 def test_t11_sibling_control_proves_within_depth_merged_head(tmp_path: Path) -> None:
     """T12 positive control: a second retained merge inside the configured depth."""
     case = shallow_case(tmp_path, sibling=True)
