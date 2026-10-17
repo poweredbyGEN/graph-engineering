@@ -791,8 +791,10 @@ def test_t6_wrong_identity_or_provenance_refuses(fx, variant):
         # Same branch name, different 40-character input provenance (prefix collision).
         pr["body"] = "Synced from gen-backend-v2 " + "c" * 40 + ".\n"
     elif variant == "head-changed-after-lookup":
-        # The branch moved between the PR evidence and the Git ref read.
-        fx.forge.branch_overrides[(CONSUMER, branch)] = "2" * 40
+        # The branch moves between the PR evidence and the Git ref read. The
+        # override is installed after ``fx.forge.reset`` because reset clears
+        # ``branch_overrides``; installed before it, the case proves nothing.
+        pass
     else:  # not-ancestor: the merged commit is not in current main's history
         git("checkout", "-q", "--detach", git("rev-parse", "main", cwd=work), cwd=work)
         (work / "DIVERGENT").write_text("x\n")
@@ -802,6 +804,15 @@ def test_t6_wrong_identity_or_provenance_refuses(fx, variant):
         pr = merge_pr_for(fx, branch, divergent)
         head = divergent
     fx.forge.reset([pr])
+    if variant == "head-changed-after-lookup":
+        fx.forge.branch_overrides[(CONSUMER, branch)] = "2" * 40
+        moved = fx.forge.branch_head(CONSUMER, branch)
+        if fx.forge.branch_overrides.get((CONSUMER, branch)) != "2" * 40 or moved != "2" * 40:
+            raise RuntimeError(
+                "fixture: the moved branch is not in effect after the PR reset "
+                f"(override={fx.forge.branch_overrides.get((CONSUMER, branch))!r}, "
+                f"branch_head={moved!r}); this case would prove nothing"
+            )
     before_refs, before_bytes = fx.refs(bare), sheet_bytes(bare)
     checkpoint = fx.checkpoint()
 
