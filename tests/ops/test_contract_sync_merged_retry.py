@@ -621,7 +621,6 @@ def test_t1_merged_consumer_with_identical_regeneration_is_a_no_op(fx):
 # -----------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError)
 def test_t2_merged_consumer_with_stamp_only_diff_converges(fx):
     # intent: a retained branch whose PR is merged with this exact head/base and
     # input provenance is already satisfied even when regeneration re-stamps
@@ -885,7 +884,6 @@ def test_t7_unavailable_or_malformed_evidence_refuses(fx, variant):
 # -----------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError)
 def test_t8_sibling_failure_holds_the_global_checkpoint(fx):
     # intent: the global checkpoint advances only after every consumer is
     # terminal; a sibling failure replays this consumer without duplicate writes.
