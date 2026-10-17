@@ -9,6 +9,9 @@ production state is touched.
 The catalog-sheet artifacts in the fixture are parsed and rendered with the
 pinned consumer functions (``fixtures/catalog_sheet_pinned.py``, copied from
 gen-mcp-server 80b33e41), never by a second TSV reader written for this test.
+The fixture generator follows the mirror's stamping rule: ``served_sha`` is the
+consumer HEAD at mirror-cut time, so a re-run against a newer main differs only
+in declared stamp cells -- the shape of the incident (4db2221 -> 80b33e4).
 
 # intent: a retry that re-processes an already merged consumer must recognize
 # the merge from the PR and the exact head/base/input provenance, accept only
@@ -19,6 +22,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -33,7 +38,8 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 OWNER = "GEN"
 TOKEN = "contract-sync-test-token-that-must-never-be-printed"
 CONSUMER = "gen-mcp-server"
-STAMP_IN_BACKEND = "4db2221"  # ordinary cell text that happens to look like a stamp
+SHEET_PATH = "src/gen_mcp_server/contracts/catalog-sheet.tsv"
+SIDECAR_PATH = "src/gen_mcp_server/contracts/catalog-sheet.source.json"
 
 NOOP_SCRIPT = """\
 import argparse
@@ -43,10 +49,21 @@ parser.add_argument("--ref")
 parser.parse_known_args()
 """
 
+# Deterministic, isolated git for every fixture repository: no system or user
+# config (signing prompts, hooks, templates) and fixed commit timestamps.
+GIT_ENV = {
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_AUTHOR_DATE": "2026-10-16T04:20:00 +0000",
+    "GIT_COMMITTER_DATE": "2026-10-16T04:20:00 +0000",
+    "GIT_TERMINAL_PROMPT": "0",
+}
+
 
 def git(*args: str, cwd: Path | None = None) -> str:
+    env = {**os.environ, **GIT_ENV}
     return subprocess.run(
-        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+        ["git", *args], cwd=cwd, env=env, check=True, capture_output=True, text=True
     ).stdout.strip()
 
 
@@ -61,12 +78,19 @@ def write_json(path: Path, selector: int) -> None:
 
 
 class Forge:
+    """Mock Gitea.
+
+    Every non-GET request is logged on entry, whatever the route, so a product
+    that attempts a write the mock does not implement (``POST /pulls/N/update``,
+    an unmapped ``PUT``) still counts as a write.
+    """
+
     def __init__(self, repo_root: Path):
         self.repo_root = repo_root
         self.prs: list[dict] = []
         self.mode = "success"
         self.branch_overrides: dict[tuple[str, str], str] = {}
-        self.log: list[dict] = []
+        self.writes: list[dict] = []
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
         Thread(target=self.server.serve_forever, daemon=True).start()
@@ -77,13 +101,17 @@ class Forge:
     def reset(self, prs: list[dict] | None = None, mode: str = "success") -> None:
         self.prs = prs or []
         self.mode = mode
-        self.log = []
+        self.writes = []
+        self.branch_overrides = {}
 
     def mutations(self, repo: str | None = None) -> list[dict]:
-        rows = [row for row in self.log if row.get("kind") in {"create", "merge", "comment", "close", "delete"}]
+        rows = [row for row in self.writes if row.get("kind") != "unrouted"]
         if repo is not None:
             rows = [row for row in rows if f"/{repo}/" in row.get("path", "")]
         return rows
+
+    def scoped_writes(self, repo: str) -> list[dict]:
+        return [row for row in self.writes if f"/{repo}/" in row.get("path", "")]
 
     def branch_head(self, repo: str, branch: str) -> str | None:
         override = self.branch_overrides.get((repo, branch))
@@ -113,6 +141,16 @@ class Forge:
                 except BrokenPipeError:  # the client timed out on purpose
                     pass
 
+            def _send_raw(self, body: bytes) -> None:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                try:
+                    self.wfile.write(body)
+                except BrokenPipeError:
+                    pass
+
             def _route(self) -> str:
                 return self.path.split("?")[0]
 
@@ -121,42 +159,60 @@ class Forge:
                     return {}
                 return dict(part.split("=", 1) for part in self.path.split("?", 1)[1].split("&") if "=" in part)
 
+            def _record(self, kind: str, payload: dict | None = None) -> None:
+                forge.writes.append({
+                    "method": self.command, "path": self._route(), "kind": kind,
+                    **(payload or {}),
+                })
+
+            def _repo(self, path: str) -> str:
+                return path.split("/repos/", 1)[1].split("/")[1]
+
+            def _pr_failure(self) -> bool:
+                """Apply the unavailable-evidence modes to every PR read path."""
+                if forge.mode == "pr403":
+                    self._send(403, {"message": "forbidden"})
+                    return True
+                if forge.mode == "pr_timeout":
+                    import time
+
+                    time.sleep(5)
+                    return False  # the client aborts; nothing to answer
+                if forge.mode == "pr_malformed":
+                    self._send_raw(b"{not-json")
+                    return True
+                return False
+
             def do_GET(self):
                 path = self._route()
                 if path == "/__reset":
                     return self._send(204, {})
                 if "/pulls" in path:
-                    if self.path.endswith("/pulls") or "/pulls?" in self.path:
-                        if forge.mode == "pr403":
-                            return self._send(403, {"message": "forbidden"})
-                        if forge.mode == "pr_timeout":
-                            import time
-
-                            time.sleep(5)
-                        if forge.mode == "pr_malformed":
-                            raw = b"{not-json"
-                            self.send_response(200)
-                            self.send_header("Content-Type", "application/json")
-                            self.send_header("Content-Length", str(len(raw)))
-                            self.end_headers()
-                            self.wfile.write(raw)
-                            return None
+                    if self._pr_failure():
+                        return None
+                    if path.endswith("/pulls"):
                         query = self._query()
                         wanted = query.get("state", "all")
                         rows = [
                             pr for pr in forge.prs
-                            if wanted in ("all", "") or pr.get("state") == wanted
+                            if pr.get("_repo") == self._repo(path)
+                            and (wanted in ("all", "") or pr.get("state") == wanted)
                         ]
-                        if query.get("head"):
-                            rows = [pr for pr in rows if pr.get("head", {}).get("ref") == query["head"]]
-                        return self._send(200, rows)
-                    number = int(path.rstrip("/").rsplit("/", 1)[1])
-                    row = next((pr for pr in forge.prs if int(pr["number"]) == number), None)
+                        # The list endpoint takes no ``head=`` filter: a caller
+                        # must match the head ref itself, as with real Gitea.
+                        return self._send(200, [
+                            {k: v for k, v in pr.items() if k != "_repo"} for pr in rows
+                        ])
+                    tail = path.rstrip("/").rsplit("/", 1)[1]
+                    if not tail.isdigit():
+                        return self._send(404, {"message": "no such pull"})
+                    row = next((pr for pr in forge.prs
+                                if pr.get("_repo") == self._repo(path) and int(pr["number"]) == int(tail)), None)
                     if row is None:
                         return self._send(404, {"message": "no such pull"})
-                    return self._send(200, row)
+                    return self._send(200, {k: v for k, v in row.items() if k != "_repo"})
                 if "/branches/" in path:
-                    repo = path.split("/repos/", 1)[1].split("/")[1]
+                    repo = self._repo(path)
                     branch = path.split("/branches/", 1)[1]
                     head = forge.branch_head(repo, branch)
                     if head is None:
@@ -164,9 +220,11 @@ class Forge:
                     return self._send(200, {"name": branch, "commit": {"id": head}})
                 if "/commits/" in path and path.endswith("/statuses"):
                     mode = forge.mode
-                    if mode in ("absent",):
+                    if mode == "absent":
                         return self._send(200, [])
-                    state = "success" if mode in ("success", "behind", "conflict", "pr403", "pr_timeout", "pr_malformed") else mode
+                    state = "success" if mode in (
+                        "success", "behind", "conflict", "pr403", "pr_timeout", "pr_malformed"
+                    ) else mode
                     return self._send(200, [
                         {"id": 1, "context": "ci/woodpecker/push/ci", "status": state},
                         {"id": 2, "context": "Development Workflow / Unit Tests (pull_request)", "status": "pending"},
@@ -186,7 +244,7 @@ class Forge:
                 payload = self._payload()
                 if path.endswith("/merge"):
                     number = int(path.split("/pulls/", 1)[1].split("/")[0])
-                    forge.log.append({"kind": "merge", "path": path, "number": number, "do": payload.get("Do")})
+                    self._record("merge", {"number": number, "do": payload.get("Do")})
                     if forge.mode in ("behind", "conflict"):
                         return self._send(405, {"message": "Not possible to fast-forward"})
                     for pr in forge.prs:
@@ -194,39 +252,51 @@ class Forge:
                             pr.update({"state": "closed", "merged": True})
                     return self._send(200, {"merged": True})
                 if "/issues/" in path and path.endswith("/comments"):
-                    forge.log.append({"kind": "comment", "path": path, "body": payload.get("body")})
+                    self._record("comment", {"body": payload.get("body")})
                     return self._send(201, {"id": 1})
                 if path.endswith("/pulls"):
-                    number = 900 + len([r for r in forge.log if r["kind"] == "create"])
-                    forge.log.append({
-                        "kind": "create", "path": path, "number": number,
-                        "head": payload.get("head"), "body": payload.get("body"),
-                    })
+                    number = 900 + len([r for r in forge.writes if r["kind"] == "create"])
+                    head = forge.branch_head(self._repo(path), payload.get("head", ""))
+                    self._record("create", {"number": number, "head": payload.get("head")})
                     forge.prs.append({
                         "number": number, "state": "open", "merged": False,
-                        "base": {"ref": payload.get("base", "main")},
-                        "head": {"ref": payload.get("head"), "sha": forge.branch_head(
-                            path.split("/repos/", 1)[1].split("/")[1], payload.get("head", ""))},
+                        "base": {"ref": payload.get("base", "main"), "repo": _identity(self._repo(path))},
+                        "head": {"ref": payload.get("head"), "sha": head, "repo": _identity(self._repo(path))},
                         "title": payload.get("title", ""), "body": payload.get("body", ""),
+                        "_repo": self._repo(path),
                     })
                     return self._send(201, {"number": number, "head": {"ref": payload.get("head")}})
+                # Everything else is an attempt to write that this mock does not
+                # implement (for example POST /pulls/N/update?style=rebase).
+                self._record("unrouted")
                 return self._send(404, {"message": "no route"})
 
             def do_PATCH(self):
                 path = self._route()
                 self._payload()
-                number = int(path.split("/pulls/", 1)[1].split("/")[0])
-                forge.log.append({"kind": "close", "path": path, "number": number})
+                if "/pulls/" not in path:
+                    self._record("unrouted")
+                    return self._send(404, {"message": "no route"})
+                tail = path.rstrip("/").rsplit("/", 1)[1]
+                if not tail.isdigit():
+                    self._record("unrouted")
+                    return self._send(404, {"message": "no route"})
+                number = int(tail)
+                self._record("close", {"number": number})
                 for pr in forge.prs:
                     if int(pr["number"]) == number:
                         pr["state"] = "closed"
                 return self._send(200, {})
 
+            def do_PUT(self):
+                self._record("unrouted")
+                return self._send(404, {"message": "no route"})
+
             def do_DELETE(self):
                 path = self._route()
-                repo = path.split("/repos/", 1)[1].split("/")[1]
+                repo = self._repo(path)
                 branch = path.split("/branches/", 1)[1]
-                forge.log.append({"kind": "delete", "path": path, "branch": branch})
+                self._record("delete", {"branch": branch})
                 subprocess.run(
                     ["git", "--git-dir", str(forge.repo_root / f"{repo}.git"), "update-ref", "-d", f"refs/heads/{branch}"],
                     cwd=str(forge.repo_root), check=False, capture_output=True,
@@ -234,6 +304,10 @@ class Forge:
                 return self._send(204, {})
 
         return Handler
+
+
+def _identity(repo: str) -> dict:
+    return {"full_name": f"{OWNER}/{repo}", "name": repo, "owner": {"login": OWNER}}
 
 
 # -----------------------------------------------------------------------------
@@ -281,7 +355,8 @@ class Fixture:
             write_json(be / "docs" / "generated" / f"{name}.json", 1)
         (be / "config").mkdir()
         (be / "config" / "creation_cards.yml").write_text("version: 1\n")
-        (be / "config" / "model_capabilities.yml").write_text(f"version: {STAMP_IN_BACKEND}\n")
+        # The watched value the catalog sheet's ordinary enum cell derives from.
+        (be / "config" / "model_capabilities.yml").write_text("version: mirror-v1\n")
         self.be_old = self.commit_all(be, "backend v1")
         git("remote", "add", "origin", str(self.be_bare), cwd=be)
         self.push_main(be)
@@ -291,7 +366,6 @@ class Fixture:
         self.push_main(be)
         self.be_work = be
         self.be8 = self.be[:8]
-        self.be_old7 = self.be_old[:7]
 
     def _build_mcp(self) -> None:
         mcp_bare = self.init_bare("mcp-source")
@@ -306,7 +380,7 @@ class Fixture:
         self.push_main(mcp)
         self.mcp_work = mcp
 
-    def _build_consumer(self, name: str, files: dict[str, str], message: str) -> tuple[Path, Path]:
+    def _build_consumer(self, name: str, files: dict[str, str], message: str) -> tuple[Path, Path, str]:
         bare = self.init_bare(name)
         work = self.work / name
         git("init", "-q", "--initial-branch=main", str(work))
@@ -320,8 +394,16 @@ class Fixture:
         self.push_main(work)
         return work, bare, head
 
-    def mcp_consumer(self, sheet_at: str | None) -> tuple[Path, Path, str]:
-        """gen-mcp-server whose vendored catalog sheet is stamped at ``sheet_at``."""
+    def run_regen(self, work: Path, stamp_mode: str) -> None:
+        subprocess.run(
+            [sys.executable, "scripts/vendor_vidsheet_action_schema.py",
+             "--backend-path", str(self.be_work), "--ref", "origin/main"],
+            cwd=work, check=True, capture_output=True, text=True,
+            env={**os.environ, "FIXTURE_STAMP_MODE": stamp_mode},
+        )
+
+    def mcp_consumer(self, sheet: bool, stamp_mode: str = "consumer-head") -> tuple[Path, Path, str, str]:
+        """gen-mcp-server consumer; returns work, bare, main head, stamp at cut time."""
         files = {
             "scripts/vendor_creation_card_branches.py": NOOP_SCRIPT,
             "scripts/vendor_creation_card_matrix.py": NOOP_SCRIPT,
@@ -331,20 +413,25 @@ class Fixture:
             "scripts/catalog_sheet_pinned.py": (FIXTURES / "catalog_sheet_pinned.py").read_text(),
         }
         work, bare, head = self._build_consumer(CONSUMER, files, "consumer baseline")
-        if sheet_at is not None:
-            subprocess.run(
-                [sys.executable, "scripts/vendor_vidsheet_action_schema.py",
-                 "--backend-path", str(self.be_work), "--ref", sheet_at],
-                cwd=work, check=True, capture_output=True, text=True,
-            )
+        cut_at = ""
+        if sheet:
+            # The mirror records the consumer HEAD it was cut from, never the
+            # backend sha and never the commit that will carry the sheet.
+            cut_at = self.consumer_head_short(work)
+            self.run_regen(work, stamp_mode)
             head = self.commit_all(work, "vendor catalog sheet")
             self.push_main(work)
-        return work, bare, head
+        return work, bare, head, cut_at
+
+    @staticmethod
+    def consumer_head_short(work: Path) -> str:
+        return git("rev-parse", "--short", "HEAD", cwd=work)
 
     def retain_merged_branch(self, bare: Path, work: Path, head: str) -> str:
         branch = f"auto/contract-sync-{self.be8}"
         git("push", "-q", "origin", f"{head}:refs/heads/{branch}", cwd=work)
-        assert git("--git-dir", str(bare), "rev-parse", f"refs/heads/{branch}", cwd=str(self.root)) == head
+        if git("--git-dir", str(bare), "rev-parse", f"refs/heads/{branch}", cwd=str(self.root)) != head:
+            raise RuntimeError("fixture: retained branch head does not match the merged head")
         return branch
 
     def run_sync(self, consumers: str, curl_timeout: int = 2, extra_env: dict | None = None):
@@ -372,9 +459,9 @@ class Fixture:
             capture_output=True, text=True, timeout=180
         )
 
-    def checkpoint(self) -> str:
+    def checkpoint(self, name: str = "last-be-sha") -> str:
         try:
-            return (self.state / "last-be-sha").read_text().strip()
+            return (self.state / name).read_text().strip()
         except OSError:
             return ""
 
@@ -385,25 +472,59 @@ class Fixture:
         return git("--git-dir", str(bare), "for-each-ref", "--format=%(refname) %(objectname)",
                    cwd=str(self.root))
 
-    def merged_pr(self, repo: str, number: int, branch: str, head: str,
-                  base_ref: str = "main", base_sha: str | None = None,
-                  backend_sha: str | None = None, merged: bool = True) -> dict:
-        backend_sha = backend_sha or self.be
+    def path_bytes(self, bare: Path, relative: str) -> bytes | None:
+        run = subprocess.run(
+            ["git", "--git-dir", str(bare), "show", f"main:{relative}"],
+            cwd=str(self.root), capture_output=True,
+        )
+        return run.stdout if run.returncode == 0 else None
+
+    def merged_pr(self, repo: str, number: int, branch: str, head: str, *,
+                  base_ref: str = "main", merged: bool = True,
+                  head_repo: str | None = None, body_sha: str | None = None) -> dict:
+        """A Gitea pull as the API returns it, including base/head repo identity."""
         return {
-            "number": number, "state": "closed" if merged else "closed",
+            "number": number,
+            "state": "closed",
             "merged": merged,
             "merged_at": "2026-10-16T04:20:00Z" if merged else None,
             "merge_commit_sha": head,
-            "title": f"chore: sync backend contracts to gen-backend-v2 {backend_sha[:8]}",
-            "body": f"Synced from gen-backend-v2 {backend_sha}.\n",
-            "base": {"ref": base_ref, "sha": base_sha if base_sha is not None else head},
-            "head": {"ref": branch, "sha": head},
+            "title": f"chore: sync backend contracts to gen-backend-v2 {self.be[:8]}",
+            "body": f"Synced from gen-backend-v2 {body_sha or self.be}.\n",
+            "base": {"ref": base_ref, "sha": head, "repo": _identity(repo)},
+            "head": {"ref": branch, "sha": head, "repo": _identity(head_repo or repo)},
             "html_url": f"http://mock.invalid/{repo}/pulls/{number}",
+            "_repo": repo,
         }
 
     def assert_no_writes(self, bare: Path, before_refs: str, repo: str) -> None:
         assert self.refs(bare) == before_refs, "a retry must not push, move or delete a ref"
-        assert self.forge.mutations(repo) == [], "a retry must not create, merge, comment or close"
+        scoped = self.forge.scoped_writes(repo)
+        assert scoped == [], f"a retry must not send any remote write: {scoped}"
+
+
+# Infrastructure failures also end in exit 1; a refusal case is only meaningful
+# when the run reached the consumer's disposition instead.
+REFUSAL_NOISE = (
+    "cannot clone", "required tool not found", "regeneration failed",
+    "no regeneration command", "unknown FIXTURE", "no route",
+    "cannot read the working tree", "cannot stage", "cannot commit",
+)
+
+
+def assert_real_refusal(run) -> None:
+    text = run.stdout + run.stderr
+    for noise in REFUSAL_NOISE:
+        assert noise not in text, f"refusal is an infrastructure error, not a disposition: {noise!r}\n{text}"
+
+
+@pytest.fixture(autouse=True)
+def harness_tools():
+    # The orchestration refuses to run without these, and that refusal is an
+    # exit 1 that would otherwise read as a legitimate refusal.
+    missing = [tool for tool in ("bash", "curl", "git", "cmp") if shutil.which(tool) is None]
+    if missing:
+        raise RuntimeError(f"the contract-sync harness needs {missing} on PATH")
 
 
 @pytest.fixture()
@@ -415,17 +536,18 @@ def fx(tmp_path):
 
 def sheet_bytes(bare: Path) -> bytes:
     return subprocess.run(
-        ["git", "--git-dir", str(bare), "show", "main:src/gen_mcp_server/contracts/catalog-sheet.tsv"],
+        ["git", "--git-dir", str(bare), "show", f"main:{SHEET_PATH}"],
         cwd=str(bare.parent), check=True, capture_output=True,
     ).stdout
 
 
-def retry_case(fx: Fixture, *, sheet_at: str | None) -> tuple[Path, Path, str, str]:
+def retry_case(fx: Fixture, stamp_mode: str = "consumer-head",
+               sheet: bool = True) -> tuple[Path, Path, str, str, str]:
     """Consumer main + retained merged branch head, with the provenance checkpoint set."""
-    work, bare, head = fx.mcp_consumer(sheet_at)
+    work, bare, head, cut_at = fx.mcp_consumer(sheet, stamp_mode)
     branch = fx.retain_merged_branch(bare, work, head)
     fx.seed_checkpoint(fx.be_old)
-    return work, bare, head, branch
+    return work, bare, head, branch, cut_at
 
 
 def merge_pr_for(fx: Fixture, branch: str, head: str, **kwargs) -> dict:
@@ -433,23 +555,27 @@ def merge_pr_for(fx: Fixture, branch: str, head: str, **kwargs) -> dict:
 
 
 # -----------------------------------------------------------------------------
-# T1 -- the merged branch head equals main and regeneration is identical.
+# T1 -- regeneration is identical, so the retry is a plain no-op.
 # -----------------------------------------------------------------------------
 
 
 def test_t1_merged_consumer_with_identical_regeneration_is_a_no_op(fx):
     # intent: a lost checkpoint replay of an already merged, fully-converged
     # consumer succeeds without a new push, PR, merge or branch deletion.
-    _, bare, head, branch = retry_case(fx, sheet_at=fx.be)  # main is already stamped B
+    # The consumer here is the content-only generator (no volatile stamp cell),
+    # so re-running it reproduces the committed sheet byte for byte.
+    content = {"FIXTURE_STAMP_MODE": "content"}
+    _, bare, head, branch, _ = retry_case(fx, stamp_mode="content")
     fx.forge.reset([merge_pr_for(fx, branch, head)])
     before_refs, before_bytes = fx.refs(bare), sheet_bytes(bare)
 
-    run = fx.run_sync(CONSUMER)
+    run = fx.run_sync(CONSUMER, extra_env=content)
 
     assert run.returncode == 0, run.stdout + run.stderr
     fx.assert_no_writes(bare, before_refs, CONSUMER)
     assert sheet_bytes(bare) == before_bytes
     assert fx.checkpoint() == fx.be, "the consumer reached its terminal success"
+    assert fx.checkpoint("last-mcp-sha"), "the MCP source is recorded with the backend source"
 
 
 # -----------------------------------------------------------------------------
@@ -461,18 +587,26 @@ def test_t1_merged_consumer_with_identical_regeneration_is_a_no_op(fx):
 def test_t2_merged_consumer_with_stamp_only_diff_converges(fx):
     # intent: a retained branch whose PR is merged with this exact head/base and
     # input provenance is already satisfied even when regeneration re-stamps
-    # served_sha; the retry must not push, open a PR, merge, delete or edit.
-    _, bare, head, branch = retry_case(fx, sheet_at=fx.be_old)  # main stamped A, replay is B
+    # served_sha A->M; the retry must not push, open a PR, merge, delete or edit,
+    # and must not rewrite an ordinary cell that repeats the old stamp text.
+    _, bare, head, branch, old_stamp = retry_case(fx)
     fx.forge.reset([merge_pr_for(fx, branch, head)])
     before_refs, before_bytes = fx.refs(bare), sheet_bytes(bare)
-    assert STAMP_IN_BACKEND.encode() in before_bytes, "ordinary cell text carries the old stamp"
-    assert fx.be_old7 != fx.be[:7]
+    new_stamp = head[:7]
+    evidence = f"mirror cut at {old_stamp}".encode()
+    if not old_stamp or old_stamp.encode() not in before_bytes:
+        raise RuntimeError("fixture: the committed sheet does not carry the real old stamp")
+    if evidence not in before_bytes:
+        raise RuntimeError("fixture: no ordinary cell carries the old stamp text")
+    if old_stamp == new_stamp:
+        raise RuntimeError("fixture: the replay stamp did not move")
 
     run = fx.run_sync(CONSUMER)
 
     assert run.returncode == 0, run.stdout + run.stderr
     fx.assert_no_writes(bare, before_refs, CONSUMER)
     assert sheet_bytes(bare) == before_bytes, "no file or real cell may be rewritten"
+    assert evidence in sheet_bytes(bare), "ordinary cell text is not a declared stamp"
     assert fx.checkpoint() == fx.be
 
 
@@ -484,7 +618,7 @@ def test_t2_merged_consumer_with_stamp_only_diff_converges(fx):
 def test_t3_closed_unmerged_pr_with_stamp_only_diff_refuses(fx):
     # intent: a closed, unmerged PR is not proof; the retry refuses with zero
     # writes even when the regenerated difference is only the declared stamp.
-    _, bare, head, branch = retry_case(fx, sheet_at=fx.be_old)
+    _, bare, head, branch, _ = retry_case(fx)
     fx.forge.reset([merge_pr_for(fx, branch, head, merged=False)])
     before_refs, before_bytes = fx.refs(bare), sheet_bytes(bare)
     checkpoint = fx.checkpoint()
@@ -492,30 +626,40 @@ def test_t3_closed_unmerged_pr_with_stamp_only_diff_refuses(fx):
     run = fx.run_sync(CONSUMER)
 
     assert run.returncode == 1, run.stdout + run.stderr
+    assert_real_refusal(run)
     fx.assert_no_writes(bare, before_refs, CONSUMER)
     assert sheet_bytes(bare) == before_bytes
     assert fx.checkpoint() == checkpoint
 
 
 # -----------------------------------------------------------------------------
-# T4 -- the regeneration changes one real cell as well as the stamp.
+# T4 -- the regeneration changes real content as well as the stamp.
 # -----------------------------------------------------------------------------
 
 
-def test_t4_real_regenerated_change_refuses(fx):
-    # intent: only declared stamp cells are volatile; a changed tool enum or
-    # artifact byte keeps the consumer at refusal with every byte preserved.
-    work, bare, head = fx.mcp_consumer(sheet_at=fx.be_old)
-    # Make main's ordinary cell stale relative to what the input now produces:
-    # the regenerated sheet changes one real Branches cell, not just served_sha.
-    sheet = work / "src" / "gen_mcp_server" / "contracts" / "catalog-sheet.tsv"
-    sheet.write_text(sheet.read_text().replace(
-        f"mode: version: {STAMP_IN_BACKEND} | manual", "mode: STALE | manual"
-    ))
-    head = fx.commit_all(work, "stale real cell")
+@pytest.mark.parametrize("variant", ["enum-cell", "second-artifact"])
+def test_t4_real_regenerated_change_refuses(fx, variant):
+    # intent: only declared stamp cells are volatile; a changed tool cell or a
+    # changed generated artifact keeps the consumer at refusal, preserves every
+    # byte and never advances the checkpoint, even though the merge is proven.
+    work, bare, head, branch, _ = retry_case(fx)
+    # Main advances past the merged head with a real generated-content change, so
+    # the merged commit stays an ancestor of main while regeneration now yields
+    # more than a stamp difference.
+    if variant == "enum-cell":
+        sheet = work / SHEET_PATH
+        text = sheet.read_text()
+        stale = text.replace("mode: version: mirror-v1 | manual", "mode: STALE | manual")
+        if stale == text:
+            raise RuntimeError("fixture: the derived enum cell was not found to make stale")
+        sheet.write_text(stale)
+    else:
+        sidecar = work / SIDECAR_PATH
+        if not sidecar.exists():
+            raise RuntimeError("fixture: the generated sidecar artifact is missing")
+        sidecar.unlink()
+    fx.commit_all(work, f"{variant} after merge")
     fx.push_main(work)
-    branch = fx.retain_merged_branch(bare, work, head)
-    fx.seed_checkpoint(fx.be_old)
     fx.forge.reset([merge_pr_for(fx, branch, head)])
     before_refs, before_bytes = fx.refs(bare), sheet_bytes(bare)
     checkpoint = fx.checkpoint()
@@ -523,8 +667,11 @@ def test_t4_real_regenerated_change_refuses(fx):
     run = fx.run_sync(CONSUMER)
 
     assert run.returncode == 1, run.stdout + run.stderr
+    assert_real_refusal(run)
     fx.assert_no_writes(bare, before_refs, CONSUMER)
     assert sheet_bytes(bare) == before_bytes
+    if variant == "second-artifact":
+        assert fx.path_bytes(bare, SIDECAR_PATH) is None, "the missing artifact is not re-added remotely"
     assert fx.checkpoint() == checkpoint
 
 
@@ -574,6 +721,7 @@ def test_t5_open_pr_is_reused_and_merged_once_when_green(fx):
     assert not [row for row in fx.forge.mutations("gen-agentic") if row["kind"] == "create"]
     assert fx.refs(bare) == before_refs, "no second push for a retry"
     assert fx.checkpoint() == fx.be
+    assert fx.checkpoint("last-mcp-sha"), "the MCP source advances with the backend source"
 
 
 # -----------------------------------------------------------------------------
@@ -581,24 +729,29 @@ def test_t5_open_pr_is_reused_and_merged_once_when_green(fx):
 # -----------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("variant", ["wrong-base", "wrong-repo", "wrong-head", "wrong-input", "not-ancestor"])
+@pytest.mark.parametrize(
+    "variant",
+    ["wrong-base", "wrong-repo", "wrong-head", "wrong-input", "head-changed-after-lookup", "not-ancestor"],
+)
 def test_t6_wrong_identity_or_provenance_refuses(fx, variant):
     # intent: a matching branch spelling is not proof; repo, base, head, input
     # sha and merged ancestry are all part of the evidence.
-    _, bare, head, branch = retry_case(fx, sheet_at=fx.be_old)
+    work, bare, head, branch, _ = retry_case(fx)
     pr = merge_pr_for(fx, branch, head)
     if variant == "wrong-base":
         pr["base"]["ref"] = "develop"
     elif variant == "wrong-repo":
-        pr = fx.merged_pr("gen-mcp-server-fork", 606, branch, head)
+        # Same branch ref, but the head lives in a fork: not this consumer's merge.
+        pr = fx.merged_pr(CONSUMER, 606, branch, head, head_repo="gen-mcp-server-fork")
     elif variant == "wrong-head":
         pr["head"]["sha"] = "1" * 40
     elif variant == "wrong-input":
-        pr["head"]["ref"] = "auto/contract-sync-cccccccc"
-        pr["title"] = "chore: sync backend contracts to gen-backend-v2 cccccccc"
+        # Same branch name, different 40-character input provenance (prefix collision).
         pr["body"] = "Synced from gen-backend-v2 " + "c" * 40 + ".\n"
+    elif variant == "head-changed-after-lookup":
+        # The branch moved between the PR evidence and the Git ref read.
+        fx.forge.branch_overrides[(CONSUMER, branch)] = "2" * 40
     else:  # not-ancestor: the merged commit is not in current main's history
-        work = fx.work / CONSUMER
         git("checkout", "-q", "--detach", git("rev-parse", "main", cwd=work), cwd=work)
         (work / "DIVERGENT").write_text("x\n")
         divergent = fx.commit_all(work, "divergent")
@@ -613,6 +766,7 @@ def test_t6_wrong_identity_or_provenance_refuses(fx, variant):
     run = fx.run_sync(CONSUMER)
 
     assert run.returncode == 1, run.stdout + run.stderr
+    assert_real_refusal(run)
     fx.assert_no_writes(bare, before_refs, CONSUMER)
     assert sheet_bytes(bare) == before_bytes
     assert fx.checkpoint() == checkpoint
@@ -624,13 +778,15 @@ def test_t6_wrong_identity_or_provenance_refuses(fx, variant):
 
 
 @pytest.mark.parametrize(
-    "variant", ["pr-403", "pr-timeout", "pr-malformed", "catalog-dup-header", "catalog-missing-header", "catalog-truncated"]
+    "variant",
+    ["pr-403", "pr-timeout", "pr-malformed", "catalog-dup-header", "catalog-missing-header",
+     "catalog-truncated-row"],
 )
 def test_t7_unavailable_or_malformed_evidence_refuses(fx, variant):
     # intent: an API error, a timeout, a malformed PR body or a malformed
     # catalog sheet refuses within the existing bounded harness, writes nothing
     # and never prints the token.
-    _, bare, head, branch = retry_case(fx, sheet_at=fx.be_old)
+    _, bare, head, branch, _ = retry_case(fx)
     pr = merge_pr_for(fx, branch, head)
     mode = "success"
     extra_env = None
@@ -641,7 +797,7 @@ def test_t7_unavailable_or_malformed_evidence_refuses(fx, variant):
     elif variant == "pr-malformed":
         mode = "pr_malformed"
     else:
-        extra_env = {"FIXTURE_CATALOG_MODE": variant.replace("catalog-", "")}
+        extra_env = {"FIXTURE_CATALOG_MODE": variant[len("catalog-"):]}
     fx.forge.reset([pr], mode=mode)
     before_refs, before_bytes = fx.refs(bare), sheet_bytes(bare)
     checkpoint = fx.checkpoint()
@@ -649,10 +805,25 @@ def test_t7_unavailable_or_malformed_evidence_refuses(fx, variant):
     run = fx.run_sync(CONSUMER, curl_timeout=1, extra_env=extra_env)
 
     assert run.returncode == 1, run.stdout + run.stderr
+    assert_real_refusal(run)
     fx.assert_no_writes(bare, before_refs, CONSUMER)
     assert sheet_bytes(bare) == before_bytes
     assert fx.checkpoint() == checkpoint
-    assert TOKEN not in run.stdout + run.stderr + json.dumps(fx.forge.log)
+    if extra_env:
+        # The generator exited 0 and wrote the broken artifact into the clone,
+        # so the refusal comes from the malformed sheet and not from a crash.
+        clone_sheet = fx.state / CONSUMER / SHEET_PATH
+        if not clone_sheet.exists():
+            raise RuntimeError("fixture: the malformed artifact never reached the consumer clone")
+        rows = [line for line in clone_sheet.read_text().split("\n") if line and not line.startswith("#")]
+        header = next(line for line in rows if line.startswith("tool_name\t"))
+        if variant == "catalog-dup-header":
+            assert header.count("served_sha") == 2
+        elif variant == "catalog-missing-header":
+            assert "served_sha" not in header
+        else:
+            assert any(row.count("\t") < header.count("\t") for row in rows if not row.startswith("tool_name\t"))
+    assert TOKEN not in run.stdout + run.stderr + json.dumps(fx.forge.writes)
 
 
 # -----------------------------------------------------------------------------
@@ -664,13 +835,16 @@ def test_t7_unavailable_or_malformed_evidence_refuses(fx, variant):
 def test_t8_sibling_failure_holds_the_global_checkpoint(fx):
     # intent: the global checkpoint advances only after every consumer is
     # terminal; a sibling failure replays this consumer without duplicate writes.
-    _, bare, head, branch = retry_case(fx, sheet_at=fx.be_old)
+    _, bare, head, branch, _ = retry_case(fx)
     fx.forge.reset([merge_pr_for(fx, branch, head)])
     before_refs, before_bytes = fx.refs(bare), sheet_bytes(bare)
 
     first = fx.run_sync(f"{CONSUMER} gen-agentic")
     assert first.returncode == 1, first.stdout + first.stderr
     assert "cannot clone" in first.stdout, "the sibling consumer failed before any merge"
+    # The merged consumer itself reached success before the sibling failed.
+    assert re.search(rf"{CONSUMER}: ERROR", first.stdout) is None, first.stdout
+    assert re.search(rf"{CONSUMER}: ", first.stdout) is not None, first.stdout
     assert fx.checkpoint() == fx.be_old, "a sibling failure never advances the checkpoint"
     fx.assert_no_writes(bare, before_refs, CONSUMER)
     assert sheet_bytes(bare) == before_bytes
@@ -690,6 +864,7 @@ def test_t8_sibling_failure_holds_the_global_checkpoint(fx):
     second = fx.run_sync(f"{CONSUMER} gen-agentic")
     assert second.returncode == 0, second.stdout + second.stderr
     assert fx.checkpoint() == fx.be, "the checkpoint advances once, after both consumers"
+    assert fx.checkpoint("last-mcp-sha"), "both source checkpoints advance together"
     assert fx.refs(bare) == before_refs, "no duplicate write to the already merged consumer"
     assert sheet_bytes(bare) == before_bytes
     assert fx.forge.mutations(CONSUMER) == []

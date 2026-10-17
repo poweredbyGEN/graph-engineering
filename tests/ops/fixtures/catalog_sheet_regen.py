@@ -1,21 +1,34 @@
 #!/usr/bin/env python3
 """Fixture consumer regeneration command for the GEN-10539 retry cases.
 
-The contract-sync orchestration runs the consumer's own regeneration command, so
-these cases need one that produces the real vendored ``catalog-sheet.tsv`` shape.
-This script stands in for that consumer command: it stamps every row's declared
-``served_sha`` cell with the input provenance it read and preserves every other
-cell, exactly as the mirror's upsert does. Rendering and parsing go through the
-pinned consumer functions in ``catalog_sheet_pinned.py`` -- never a second TSV
-schema written for the test.
+contract-sync runs the consumer's own regeneration command, so these cases need
+one that produces the real vendored ``catalog-sheet.tsv`` shape. This script
+stands in for that consumer command, and it follows the mirror's semantics:
 
-# intent: a fixture that hand-wrote the TSV, or re-derived cells, would let a
-# product comparison pass on bytes the consumer would never produce.
+* the declared ``served_sha`` cell records the **consumer HEAD at the revision
+  the mirror was cut from** (``scripts/sheet_mirror.py``), never the backend sha
+  and never the future commit that carries the sheet;
+* every other cell is re-derived from the watched backend input, so a backend
+  change lands as a real cell change, not as a stamp change;
+* a second generated artifact (the provenance sidecar) is written from the same
+  backend-derived input and carries no stamp, so it is byte-stable between runs.
+
+Parsing and rendering go through the pinned consumer functions in
+``catalog_sheet_pinned.py`` -- never a second TSV schema written for the test.
+
+``FIXTURE_STAMP_MODE=content`` turns the mirror into a content-only generator
+(no stamp cell is written or refreshed), which is the "regeneration is
+identical" corner case.
+
+# intent: a fixture that hand-wrote the TSV, stamped the backend sha, or never
+# re-derived a cell on update would let a non-converged consumer look converged
+# and would let a real contract change masquerade as a stamp-only difference.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import pathlib
 import subprocess
@@ -25,6 +38,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import catalog_sheet_pinned as pinned  # noqa: E402
 
 SHEET = pathlib.Path("src/gen_mcp_server/contracts/catalog-sheet.tsv")
+SIDECAR = pathlib.Path("src/gen_mcp_server/contracts/catalog-sheet.source.json")
+STAMP_MODE = os.environ.get("FIXTURE_STAMP_MODE", "consumer-head")
 
 
 def backend_cell(backend: pathlib.Path) -> str:
@@ -36,19 +51,30 @@ def backend_cell(backend: pathlib.Path) -> str:
     return f"mode: {first} | manual"
 
 
-def baseline(stamp: str, backend: pathlib.Path) -> dict[str, list[dict[str, str]]]:
+def consumer_stamp() -> str | None:
+    """Consumer HEAD at mirror-cut time; ``None`` for a content-only generator."""
+    if STAMP_MODE == "content":
+        return None
+    return subprocess.check_output(["git", "-C", ".", "rev-parse", "--short", "HEAD"], text=True).strip()
+
+
+def baseline(stamp: str | None, backend: pathlib.Path) -> dict[str, list[dict[str, str]]]:
     """Sections in the pinned COLUMNS shape, for a sheet that is not committed yet."""
+    sha = stamp or ""
+    # The evidence cell is an ordinary cell whose text may repeat the old stamp;
+    # only declared served_sha cells are volatile.
+    evidence = f"GEN-9383; mirror cut at {stamp}" if stamp else "GEN-9383"
     return {
         "Tool catalog": [
             {
                 "tool_name": "gen_agent_action", "kind": "action", "replaces_legacy_count": "25",
                 "readOnlyHint": "false", "destructiveHint": "true", "idempotentHint": "false",
-                "openWorldHint": "true", "served_sha": stamp,
+                "openWorldHint": "true", "served_sha": sha,
             },
             {
                 "tool_name": "gen_analyze", "kind": "action", "replaces_legacy_count": "26",
                 "readOnlyHint": "false", "destructiveHint": "true", "idempotentHint": "false",
-                "openWorldHint": "true", "served_sha": stamp,
+                "openWorldHint": "true", "served_sha": sha,
             },
         ],
         "Branches": [
@@ -57,30 +83,44 @@ def baseline(stamp: str, backend: pathlib.Path) -> dict[str, list[dict[str, str]
                 "required_fields": "query", "enum_fields": backend_cell(backend),
                 "served_idempotency_key": "optional", "served_confirm_token": "—",
                 "source_fn": "search", "lifecycle": "", "scheduled_task_ok": "YES",
-                "served_sha": stamp,
+                "served_sha": sha,
             },
         ],
         "Discover views": [
             {
                 "domain": "vidsheet", "view": "search", "required_args": "agent_id + query",
                 "maps_legacy_tools": "gen_analyze", "scheduled_task_ok": "YES",
-                "served_sha": stamp,
+                "served_sha": sha,
             },
         ],
         "Migration": [
             {
                 "legacy_tool": "gen_analyze", "fate": "KEEP", "new_tool": "gen_analyze",
-                "new_branch_key": "search", "served_now": "yes", "served_sha": stamp,
+                "new_branch_key": "search", "served_now": "yes", "served_sha": sha,
             },
         ],
         "Provider routing": [
             {
                 "capability": "video", "mcp_capability": "generate_video", "platform": "tiktok",
                 "provider": "kling", "fallback_provider": "", "fallback_trigger": "",
-                "unit_cost": "1", "limits": "", "evidence": "GEN-9383", "served_sha": stamp,
+                "unit_cost": "1", "limits": "", "evidence": evidence, "served_sha": sha,
             },
         ],
     }
+
+
+def update(sections: dict[str, list[dict[str, str]]], stamp: str | None,
+           backend: pathlib.Path) -> dict[str, list[dict[str, str]]]:
+    """Re-mirror an existing sheet: refresh stamps and re-derive real cells."""
+    derived = backend_cell(backend)
+    for rows in sections.values():
+        for row in rows:
+            if stamp is not None and "served_sha" in row:
+                row["served_sha"] = stamp
+    for row in sections.get("Branches", []):
+        if row.get("branch_key") == "search":
+            row["enum_fields"] = derived
+    return sections
 
 
 def malformed(text: str, mode: str) -> str:
@@ -119,15 +159,10 @@ def main() -> None:
     args = parser.parse_args()
 
     backend = pathlib.Path(args.backend_path)
-    stamp = subprocess.check_output(
-        ["git", "-C", str(backend), "rev-parse", "--short", args.ref], text=True
-    ).strip()
+    stamp = consumer_stamp()
 
     if SHEET.exists():
-        sections = pinned.parse(SHEET.read_text())
-        for rows in sections.values():
-            for row in rows:
-                row["served_sha"] = stamp
+        sections = update(pinned.parse(SHEET.read_text()), stamp, backend)
     else:
         sections = baseline(stamp, backend)
 
@@ -137,6 +172,10 @@ def main() -> None:
         text = malformed(text, mode)
     SHEET.parent.mkdir(parents=True, exist_ok=True)
     SHEET.write_text(text)
+
+    SIDECAR.write_text(json.dumps(
+        {"enum_fields": backend_cell(backend), "origin": "gen-backend-v2"}, indent=2
+    ) + "\n")
 
 
 if __name__ == "__main__":
