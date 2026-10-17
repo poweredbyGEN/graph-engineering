@@ -158,6 +158,11 @@ treat itself as a first run and re-check every consumer.
   to settle before merging; a repo with no such status has nothing to cancel.
 - **No force-push, no branch reuse.** A branch for this backend sha that already has an open
   PR is that PR. A branch whose PR was closed by a human is an error, never a re-open.
+  A retained MCP branch whose exact PR merged may return success on retry only with matching
+  repository, base, head, input provenance and ancestry evidence. Its only permitted diff is
+  the catalog mirror’s declared `served_sha` cells, checked through the consumer’s canonical
+  parser in its normal runtime; every real cell/file change or unavailable proof still refuses
+  (GEN-10539). This path makes no remote writes and keeps the all-consumer checkpoint gate.
   Branches are left in place after a merge. A rebase conflict is the exception: the bot closes
   its own PR and deletes that branch so the next tick creates a fresh one from current main.
 - **The PR is never abandoned.** A red or still-running PR is left open and the state is not
