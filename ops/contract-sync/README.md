@@ -115,13 +115,20 @@ lists the open `auto/contract-sync-*` PRs in every consumer, reads the newest
 | `STALE` | checks are pending or absent past `STALE_HOURS` |
 | `OK` | green and mergeable |
 
-For `RED`, `CONFLICT` or `STALE` it opens one Plane ticket per PR and posts one Slack
-`#errors` alert in the shared `alert_policy` format. A conflict is alerted exactly like a
-red check; it is never reported `OK`. The canonical source lives in this repo; the install
-command is in **Install** below. Run its classification test offline with:
+PRs retain their existing per-PR Plane ticket mapping, while Slack incidents group
+by consumer. The same monitor compares both active production MCP units and
+deployed agentic with the Rails production contract and main. Lag alerts after
+60 minutes, escalates to one consumer Plane incident at six hours, and respects
+gen-deployd deployment windows. It also checks successful sync progress. The
+same script's `--watchman` mode runs off-box from gen-prod's existing surface timer.
+
+[Evidence, rollout and budgets](../../docs/ops/CONTRACT-SYNC-MONITOR.md) define the
+source boundaries, missing agentic identity stamps and review-only installation.
+Tests run offline with:
 
 ```bash
 python3 ops/contract-sync/test_contract_sync_pr_monitor.py
+python3 -m pytest ops/contract-sync/
 ```
 
 ## Install
@@ -129,10 +136,16 @@ python3 ops/contract-sync/test_contract_sync_pr_monitor.py
 ```bash
 sudo install -m 0644 ops/contract-sync/contract-sync.service /etc/systemd/system/
 sudo install -m 0644 ops/contract-sync/contract-sync.timer   /etc/systemd/system/
+sudo install -m 0644 ops/contract-sync/contract-sync-pr-monitor.service /etc/systemd/system/
 sudo install -m 0644 ops/contract-sync/contract-sync-pr-monitor.py /usr/local/bin/contract-sync-pr-monitor.py
 sudo systemctl daemon-reload
 sudo systemctl enable --now contract-sync.timer contract-sync-pr-monitor.timer
 ```
+
+Activation is orchestrator-owned after review. Install the off-box
+`contract-sync-watchman.conf` drop-in on gen-prod and its Infisical-sourced env
+as described in the linked runbook. Preserve existing live alert-policy and ticket
+state. An existing timeout override also needs reconciliation with the reviewed unit.
 
 The unit's `ExecStart` assumes the checkout at `/opt/agent-infra`; edit it (or a drop-in) if
 the repo lives elsewhere.

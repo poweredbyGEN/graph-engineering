@@ -15,7 +15,9 @@ import importlib.util
 import os
 import sys
 import tempfile
+import time
 import types
+from datetime import UTC, datetime
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -47,7 +49,7 @@ def _stub_alert_policy() -> None:
         def should_post(self, *args, **kwargs):
             return True, "test"
 
-        def mimo_rca(self, evidence):
+        def mimo_rca(self, evidence, timeout=20):
             return "test rca"
 
         def footer(self, *args, **kwargs):
@@ -89,6 +91,37 @@ def _pr(**overrides):
     return pr
 
 
+def _iso(epoch_seconds: float) -> str:
+    return datetime.fromtimestamp(epoch_seconds, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def healthy_snapshot() -> dict:
+    """The monitor's own probe, stubbed: Rails deployed two hours ago and both
+    consumers serve exactly its contract. ``cycle()`` reads this before the PR
+    loop, and these cases must stay offline, so the served-contract lag check has
+    nothing to report and the PR classification is the only signal."""
+    now = time.time()
+    rails = {"main_sha": "a" * 40, "deployed_sha": "b" * 40, "contract_version": "v9",
+             "contract_hash": "2" * 64, "deployed_at": _iso(now - 7200)}
+
+    def instance(unit: str) -> dict:
+        return {"unit": unit, "contract_version": "v9", "producer_sha": "b" * 40,
+                "contract_hash": "2" * 64, "deploy_sha": "b" * 40, "commits_behind": 0}
+
+    deploy = {"last_status": "success", "at": _iso(now - 7200)}
+    return {
+        "rails": rails,
+        "consumers": [
+            {"name": "gen-mcp-server",
+             "instances": [instance("gen-mcp-hosted@8090"), instance("gen-mcp-hosted@8092")],
+             "deploy": deploy},
+            {"name": "gen-agentic", "instances": [instance("gen-agentic@production")],
+             "deploy": deploy},
+        ],
+        "sync": {"last_success": _iso(now - 7100), "result": "success", "source_sha": "b" * 40},
+    }
+
+
 def test_green_mergeable_false_is_conflict():
     m = load_monitor()
     classification, failing = m.classify(_pr(mergeable=False), GREEN, 2)
@@ -127,11 +160,15 @@ def test_conflict_cycle_alerts():
     m = load_monitor()
     posted = []
     pr = _pr(mergeable=False)
+    state_dir = Path(tempfile.mkdtemp(prefix="contract-sync-monitor-cycle-"))
     m.GITEA_TOKEN = "test-token"
     m.REPOS = ["GEN/gen-agentic"]
+    m.INCIDENTS_FILE = state_dir / "incidents.json"
+    m.COMPLETE_FILE = state_dir / "last-complete.json"
     m.gitea_list_open_prs = lambda repo: [pr]
     m.gitea_statuses = lambda repo, sha: GREEN
     m.systemctl_show = lambda: ""
+    m.collect_snapshot = healthy_snapshot
     m.ensure_ticket = lambda *a, **k: None
     m.build_evidence = lambda *a, **k: "evidence"
     m.slack_post = lambda text: posted.append(text)

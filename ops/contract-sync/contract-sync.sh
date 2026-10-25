@@ -321,6 +321,16 @@ record_sources() { # <backend-sha> <mcp-sha>
   mv -f "$LAST_MCP_MANIFEST_FILE.new" "$LAST_MCP_MANIFEST_FILE"
   printf '%s\n' "$2" >"$LAST_MCP_SHA_FILE.new"
   mv -f "$LAST_MCP_SHA_FILE.new" "$LAST_MCP_SHA_FILE"
+  # Only the shared all-consumer checkpoint proves sync progress (GEN-11056).
+  python3 - "$STATE_DIR/last-success.json" "$1" <<'PY'
+import json, os, sys
+from datetime import datetime, timezone
+path, source_sha = sys.argv[1:]
+with open(path + ".new", "w") as stream:
+    json.dump({"last_success": datetime.now(timezone.utc).isoformat(),
+               "source_sha": source_sha}, stream)
+os.replace(path + ".new", path)
+PY
 }
 
 # -----------------------------------------------------------------------------

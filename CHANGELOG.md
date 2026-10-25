@@ -8,6 +8,10 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- Contract consumer lag alerts compare active MCP and agentic artifacts with deployed
+  Rails, group failing sync PRs per consumer, escalate at six hours and check the
+  QA monitor heartbeat from the existing off-box surface timer.
+
 - Contract sync watches the MCP schema and route contract records alongside backend
   artifacts, pins both clones through the public-doc generators, and joins changes into one
   docs PR. Dry runs preserve durable source checkpoints and suppress snapshot clock churn.

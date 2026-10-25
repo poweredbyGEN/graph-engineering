@@ -1,0 +1,18 @@
+[Unit]
+Description=Contract consumer lag and contract-sync PR monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/contract-sync-pr-monitor.env
+ExecStart=/usr/bin/python3 /usr/local/bin/contract-sync-pr-monitor.py
+Nice=10
+CPUQuota=20%
+MemoryMax=256M
+IOSchedulingClass=idle
+# A 480s IO deadline includes consumer RCA (20s each); reserve 120s shutdown
+# headroom. Measured worst-case RCA replay: 20.003s; real QA probe: 5.45s.
+# See docs/ops/CONTRACT-SYNC-MONITOR.md for measured dry-run timings.
+TimeoutStartSec=600
