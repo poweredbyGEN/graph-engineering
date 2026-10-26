@@ -65,6 +65,8 @@ Claude-specific.
 | `VERIFY_MCP_ROOT` | `.` | **The containment boundary.** Every path is resolved inside this; traversal and escaping symlinks are refused. |
 | `VERIFY_MCP_TIMEOUT` | `300` | Per-command timeout in seconds. |
 | `VERIFY_MCP_TRANSPORT` | `stdio` | `stdio` for local clients, `streamable-http` to run as a network service. |
+| `VERIFY_MCP_ALLOWED_ROOTS` | *(unset)* | Shared mode: `os.pathsep`-separated parent dirs a per-call repo may live under. |
+| `VERIFY_MCP_HOST` / `VERIFY_MCP_PORT` | `127.0.0.1` / `8000` | Listen address for `streamable-http`. |
 
 **Always set `VERIFY_MCP_ROOT` explicitly.** The default is the process working directory,
 which is whatever your client happened to launch from.
@@ -78,6 +80,27 @@ routing:
 ```bash
 VERIFY_MCP_TRANSPORT=streamable-http VERIFY_MCP_ROOT=/srv/repo verify-mcp
 ```
+
+### One shared instance for many sessions
+
+Launching a stdio copy per agent session costs a process per session. With
+`VERIFY_MCP_ALLOWED_ROOTS` set, one HTTP instance serves every session, each against its
+own repo:
+
+```bash
+VERIFY_MCP_TRANSPORT=streamable-http VERIFY_MCP_PORT=8944 \
+VERIFY_MCP_ALLOWED_ROOTS="$HOME/projects:$HOME/mnt-data/projects" verify-mcp
+```
+
+Every tool takes an optional `repo` (absolute path). Each call resolves its repo in this
+order: the `repo` argument, then the client's first MCP root (`roots/list`, when the client
+supports it), else the call is refused — a shared server never falls back to its own cwd.
+The chosen repo must resolve inside one of the allowed parents (traversal and escaping
+symlinks are refused, as for `path`), and `path` stays confined to that repo. Commands run
+off the event loop, so one session's long test run does not stall the others.
+
+Without `VERIFY_MCP_ALLOWED_ROOTS` nothing changes: `repo` may be passed but must lie
+inside `VERIFY_MCP_ROOT`, and client roots are ignored.
 
 ## Design notes
 
