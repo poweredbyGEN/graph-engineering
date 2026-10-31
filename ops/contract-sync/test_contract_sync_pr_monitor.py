@@ -86,6 +86,7 @@ def _pr(**overrides):
         "title": "chore: sync backend contracts",
         "created_at": "2026-10-10T00:00:00Z",
         "head": {"ref": "auto/contract-sync-deadbeef", "sha": "b" * 40},
+        "base": {"ref": "main"},
     }
     pr.update(overrides)
     return pr
@@ -163,14 +164,19 @@ def test_conflict_cycle_alerts():
     state_dir = Path(tempfile.mkdtemp(prefix="contract-sync-monitor-cycle-"))
     m.GITEA_TOKEN = "test-token"
     m.REPOS = ["GEN/gen-agentic"]
+    m.STATE_DIR = state_dir
+    m.LOG_DIR = state_dir / "log"
+    m.PROBE_LOG = m.LOG_DIR / "probe.log"
+    m.ALERT_LOG = m.LOG_DIR / "alerts.log"
+    m.TICKETS_FILE = state_dir / "tickets.json"
     m.INCIDENTS_FILE = state_dir / "incidents.json"
     m.COMPLETE_FILE = state_dir / "last-complete.json"
     m.gitea_list_open_prs = lambda repo: [pr]
     m.gitea_statuses = lambda repo, sha: GREEN
     m.systemctl_show = lambda: ""
     m.collect_snapshot = healthy_snapshot
-    m.ensure_ticket = lambda *a, **k: None
-    m.build_evidence = lambda *a, **k: "evidence"
+    m.plane_create_issue = lambda payload: {"id": "conflict-test", "sequence_id": 9537}
+    m.plane_create_comment = lambda *args: {}
     m.slack_post = lambda text: posted.append(text)
     result = m.cycle()
     assert any(f["classification"] == "CONFLICT" for f in result["findings"]), result

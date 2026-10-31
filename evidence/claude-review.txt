@@ -1,0 +1,85 @@
+# Review: contract-sync consumer lag clock
+
+**VERDICT: FAIL.** One HIGH issue: the PR clock can downgrade or silence a critical served-contract incident. It is a regression from the old code.
+
+## HIGH-1: PR clock overwrites and holds served-contract incidents
+
+**Where:** `ops/contract-sync/contract-sync-pr-monitor.py` › `cycle()`, PR loop:
+```python
+if age < WARNING_HOURS * 3600 or (grace and age <= GRACE_S):
+    held.add(consumer)
+...
+by_consumer[consumer].update(classification=classification, age_s=age,
+                            severity="critical" if age >= CRITICAL_HOURS * 3600 else "warning")
+```
+The old code only appended `details.prs` to an existing served item. The new code replaces its classification, age and severity. A young PR can also put the consumer in `held`, which hides a served finding that is outside grace.
+
+**Counterexample A (merged but not deployed):**
+- Rails `deployed_at = now-8h`.
+- The `gen-mcp-server` instance hash differs from Rails. Its deploy was 2 days ago and is not deploying.
+- `lag_evaluations` returns `behind`, critical, `age_s=28800`.
+- A green sync PR for the next Rails main change was opened at `now-1800`.
+- The loop computes age 1800, which is under 7200, so it adds the consumer to `held` and sets severity to warning.
+- `reconcile` skips ticket creation because the consumer is held, and the returned list filters it out.
+- **Result:** no Slack alert, no ticket, no MiMo. An 8-hour served lag stays silent until the PR is 2h old, then shows as `PR_PENDING` warning. It is not critical again until the PR reaches 24h.
+
+**Counterexample B (unit down):** `gen-mcp-hosted@8090` has `MainPID=0`, so the unit is not running and its contract hash is `None`. That is an `identity_error`, which is critical and bypasses grace. A sync PR opened 20 minutes ago silences it for 2h. After that it shows as warning, and the `identity_error` label is replaced by the PR's state.
+
+This breaks "existing served-lag clock remains distinct". Nothing in the PR clock's contract allows it to lower the severity of a different clock.
+
+**Fix:**
+- Severity is the higher of the served and PR severities.
+- Age uses the stronger clock's value.
+- Hold only when there is no served finding.
+- Keep the served classification and identity fields. Report the PR's worst state next to them; the test author picks the exact field.
+
+**New cases:**
+- **N1:** Counterexample A. Expect 1 finding with severity critical and classification `behind` kept, 1 Slack message containing `SEVERITY: critical`, and 1 Plane issue.
+- **N2:** Counterexample B (instance `contract_hash=None`, young green PR). Expect a critical finding and 1 Slack message.
+- **N3:** Served `behind` warning (Rails `now-3h`) plus a red PR from `now-3d`. Expect critical, so the stronger PR clock still wins when it is the stronger one.
+
+## MEDIUM (correctness, new case)
+
+**M-1: PR set going empty while served lag continues adds no ticket comment.**
+- **Where:** `reconcile()`, the condition `if prs and entry["ticket_url"] and entry.get("ticket_summary") != summary`.
+- **Counterexample:** `gen-mcp-server` has a critical ticket with summary `{prs:[A,B], RED}`. A and B merge, but the consumer is not deployed, so the served item remains with `prs=[]`. The summary changed, but `prs` is empty, so no comment is written. The ticket keeps showing A and B as open until the final recovery comment. The doc says "a later change to membership or worst state adds one comment".
+- **Fix:** use `(prs or entry.get("ticket_summary", {}).get("prs"))`.
+- **Case N4:** expect exactly one comment recording the empty PR set and the served classification, and no Slack recovery.
+
+**M-2: page-loop stop condition assumes the server returns 50 per page.**
+- **Where:** `gitea_list_open_prs()`, `if len(data) < 50`.
+- Gitea caps `limit` at its `MAX_RESPONSE_ITEMS` setting. If that is below 50, page 1 comes back short and the loop stops silently.
+- The default list order is newest first, so the oldest PRs are the ones dropped, and the age is understated.
+- The live result of exactly 30 PRs matches Gitea's default page size of 30. Confirm the count with `X-Total-Count` before trusting 99.71h.
+- **Fix:** stop on an empty page and add `sort=oldest`. That also stays correct if PRs open or close mid-scan. It costs one extra GET per repo.
+- **Case N5:** the fake server clamps pages to 30 and holds 31 PRs. Expect all 31 returned and the age taken from the oldest.
+
+## MEDIUM (architecture)
+
+- **One Plane failure stops alerts for every later consumer in the cycle.** A comment, resolve or recovery-comment failure raises out of `reconcile()`.
+  - A recovery-comment failure happens before the evaluations loop, so it blocks all Slack alerts.
+  - A permanent resolve failure is the worst case. Examples: a deleted or duplicate legacy ticket, a URL ending in a UUID where `int()` fails, or a URL whose project segment is not `PLANE_PROJECT_ID`. Then every cycle raises, and the only page is the watchman's "heartbeat stale".
+  - Raising for that consumer is in the contract (the tests expect it). Spreading to the others is not.
+  - **Fix:** handle each consumer separately, log the typed error, and raise once at the end of the cycle (no `COMPLETE_FILE`). That defers the error; it is not a fallback.
+- **Slack size grows with the backlog.** The per-PR lines, including check JSON, have no cap. api-docs is growing by about 7 PRs a day. With 4 failing checks per PR, a message passes 40k characters at roughly 65 PRs, which loses the footer or gets rejected. Suggestion: keep `#n STATE url` per PR in Slack and keep the check JSON in Plane and MiMo, which already hold the full evidence.
+
+## LOW / style
+
+- `plane_ticket_issue_id` hardcodes `GEN-` even though `PLANE_PROJECT_ID` can be set from the environment, and it ignores the project segment in the URL.
+- The comment "Legacy PR ticket mappings remain readable" is misleading: nothing reads `tickets.json` now.
+- `entry.update(..., ticket_issue_id=issue["id"], ...)`: if `id` is missing, a KeyError fires after the issue is created, nothing is saved, and the next cycle creates a duplicate. Low likelihood.
+
+## Clean areas
+
+- **Security:** clean. Calls are GET only (no Gitea or repo mutation), HTML is escaped in Plane, secrets stay in headers and out of logs, and dry run requires isolated state and log directories and skips all Slack, Plane and MiMo writes.
+- **Money:** clean. One MiMo call per accepted post, none when held or in dry run. The prompt grows a little from adding `getsource(cycle)` and `getsource(collect_prs)`.
+- **Contract items that hold:** `tickets.json` is untouched, legacy URLs are preserved, the legacy ID is resolved once and saved before the first comment, worst state does not depend on API order, Rails grace does not hold older PRs, recovery happens only with an empty backlog and only for posted incidents, and no new per-PR tickets are created.
+
+## Ponytail advisory
+
+- The runtime no longer uses `load_tickets`, `save_tickets`, `build_evidence`, `build_message`, `fingerprint()`, `gitea_pr_files`, `MAX_FILES` or `TICKETS_FILE`. Keeping the legacy file needs no code, so they can be deleted along with their tests.
+- The `"OK"` key in `priority` can never occur.
+- `plane_ticket_issue_id` builds its own request; a small `plane_get` next to `plane_post` would avoid that.
+- Keep `(grace and age <= GRACE_S)`: it does nothing at the defaults but matters when the grace or warning values are overridden.
+
+**VERDICT: FAIL** (HIGH-1; cases N1–N3 required, N4–N5 recommended).

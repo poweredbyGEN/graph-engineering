@@ -365,8 +365,7 @@ def test_c2_behind_inside_grace_is_silent(m, monkeypatch, tmp_path):
 def test_c3_twelve_red_prs_collapse_to_one_incident(m, monkeypatch, tmp_path):
     # intent: one incident per consumer, not per PR. A dozen red sync PRs for
     # gen-mcp-server produce one incident whose details carry all twelve PRs,
-    # one billed RCA and one Slack message, while every PR keeps its own Plane
-    # ticket mapping.
+    # one billed RCA, one Slack message and one consumer Plane ticket.
     fx = _install(m, monkeypatch, tmp_path)
     now = time.time()
     snapshot = _snapshot(
@@ -387,12 +386,11 @@ def test_c3_twelve_red_prs_collapse_to_one_incident(m, monkeypatch, tmp_path):
     assert len(findings[0]["details"]["prs"]) == 12
     assert [entry["pr"]["number"] for entry in findings[0]["details"]["prs"]] == list(range(643, 655))
 
-    assert len(fx.tickets) == 12, fx.tickets
-    assert [ticket[1] for ticket in fx.tickets] == list(range(643, 655))
+    assert fx.tickets == [], fx.tickets
+    assert len(fx.plane) == 1, fx.plane
     assert len(fx.policy.rca_calls) == 1, fx.policy.rca_calls
     assert len(fx.slack) == 1, fx.slack
     _mentions(fx.slack[0], "#643", "#654")
-    assert fx.plane == [], fx.plane
 
 
 # --------------------------------------------------------------------------- #

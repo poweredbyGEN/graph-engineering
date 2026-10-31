@@ -1,0 +1,207 @@
+........................F.F...FFFF.FF                                    [100%]
+=================================== FAILURES ===================================
+___________________ test_open_pr_collection_reads_every_page ___________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x71e6ca003fb0>
+
+    def test_open_pr_collection_reads_every_page(monkeypatch):
+        # intent: a backlog beyond Gitea's first page cannot hide its oldest open PR or omit evidence.
+        from urllib.parse import parse_qs, urlsplit
+
+        m = fresh_monitor()
+        pages = []
+
+        def get(path):
+            query = parse_qs(urlsplit(path).query)
+            assert query["state"] == ["open"]
+            page = int(query.get("page", ["1"])[0])
+            pages.append(page)
+            return {1: [{"number": i} for i in range(1, 51)], 2: [{"number": 51}]}.get(page, [])
+
+        monkeypatch.setattr(m, "gitea_get", get)
+        assert [pr["number"] for pr in m.gitea_list_open_prs("GEN/api-docs")] == list(range(1, 52))
+>       assert pages == [1, 2, 3]
+E       assert [1, 2] == [1, 2, 3]
+E
+E         Right contains one more item: 3
+E         Use -v to get more diff
+
+ops/contract-sync/test_contract_lag_clock.py:400: AssertionError
+_ test_large_backlog_alert_fits_slack_and_keeps_each_pr_and_full_investigation _
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x71e6ca10e570>
+
+    def test_large_backlog_alert_fits_slack_and_keeps_each_pr_and_full_investigation(fx, monkeypatch):
+        # intent: a real-sized backlog fits one Slack message without truncating the PR list, footer or investigation evidence.
+        rca = []
+        footer = "\n_probe: offline:contract-sync-pr-monitor.py · tail:alerts.log · state:isolated_"
+        monkeypatch.setattr(fx.policy, "footer", lambda *args: footer)
+        monkeypatch.setattr(fx.policy, "mimo_rca", lambda evidence, timeout=20: rca.append(evidence) or "offline RCA")
+        for number in range(312, 358):
+            pr = add_pr(fx, number, 4 * DAY)
+            pr["title"] = "chore: sync backend contracts with validated consumer schema " + "contract-field " * 10
+            fx.states[pr["head"]["sha"]] = [{
+                "context": f"ci/woodpecker/pr/shard-{shard}", "status": "failure",
+                "target_url": f"https://ci.invalid/repos/48/pipeline/{10000 + number}/{shard}",
+                "created_at": D.B._iso(NOW - 60),
+            } for shard in range(1, 5)]
+        newest = fx.prs[-1]
+        newest["created_at"] = D.B._iso(NOW - 600)
+        fx.states[newest["head"]["sha"]] = [{
+            "context": "ci/woodpecker/pr/ci", "status": "pending",
+            "target_url": "https://ci.invalid/repos/48/pipeline/10357/1",
+            "created_at": D.B._iso(NOW - 60),
+        }]
+        fx.m.cycle()
+        assert len(fx.slack) == 1
+        message = fx.slack[0]
+        assert len(message) < 40000, len(message)
+        for pr in fx.prs:
+            assert f"#{pr['number']} " in message
+        assert "RED" in message and "PENDING" in message
+        pr_lines = [line for line in message.splitlines() if line.startswith("#")]
+>       assert len(pr_lines) == 46 and all("checks=" not in line for line in pr_lines)
+E       assert (46 == 46 and False)
+E        +  where 46 = len(['#312 https://git.invalid/GEN/api-docs/pulls/312 RED checks=[{"context": "ci/woodpecker/pr/shard-1", "status": "failu... "ci/woodpecker/pr/shard-4", "status": "failure", "target_url": "https://ci.invalid/repos/48/pipeline/10317/4"}]', ...])
+E        +  and   False = all(<generator object test_large_backlog_alert_fits_slack_and_keeps_each_pr_and_full_investigation.<locals>.<genexpr> at 0x71e6ca111a40>)
+
+ops/contract-sync/test_contract_lag_clock.py:440: AssertionError
+_ test_unverified_served_identity_stays_critical_with_open_pr_evidence[600-identity_error] _
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+classification = 'identity_error', pr_age = 600
+
+    @pytest.mark.parametrize("classification", ["identity_error", "missing_instances"])
+    @pytest.mark.parametrize("pr_age", [600, 3 * 3600])
+    def test_unverified_served_identity_stays_critical_with_open_pr_evidence(fx, classification, pr_age):
+        # intent: young or warning-aged PRs cannot hide or downgrade an unverified served consumer identity.
+        instances = [] if classification == "missing_instances" else [D.B._instance(contract_hash=None)]
+        fx.snapshot["consumers"] = [D.B._consumer("api-docs", instances, deploy=D.B._deploy(NOW))]
+        add_pr(fx, 312, pr_age)
+        result = fx.m.cycle()["findings"]
+>       assert len(result) == 1
+E       assert 0 == 1
+E        +  where 0 = len([])
+
+ops/contract-sync/test_contract_lag_clock.py:485: AssertionError
+_ test_unverified_served_identity_stays_critical_with_open_pr_evidence[600-missing_instances] _
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+classification = 'missing_instances', pr_age = 600
+
+    @pytest.mark.parametrize("classification", ["identity_error", "missing_instances"])
+    @pytest.mark.parametrize("pr_age", [600, 3 * 3600])
+    def test_unverified_served_identity_stays_critical_with_open_pr_evidence(fx, classification, pr_age):
+        # intent: young or warning-aged PRs cannot hide or downgrade an unverified served consumer identity.
+        instances = [] if classification == "missing_instances" else [D.B._instance(contract_hash=None)]
+        fx.snapshot["consumers"] = [D.B._consumer("api-docs", instances, deploy=D.B._deploy(NOW))]
+        add_pr(fx, 312, pr_age)
+        result = fx.m.cycle()["findings"]
+>       assert len(result) == 1
+E       assert 0 == 1
+E        +  where 0 = len([])
+
+ops/contract-sync/test_contract_lag_clock.py:485: AssertionError
+_ test_unverified_served_identity_stays_critical_with_open_pr_evidence[10800-identity_error] _
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+classification = 'identity_error', pr_age = 10800
+
+    @pytest.mark.parametrize("classification", ["identity_error", "missing_instances"])
+    @pytest.mark.parametrize("pr_age", [600, 3 * 3600])
+    def test_unverified_served_identity_stays_critical_with_open_pr_evidence(fx, classification, pr_age):
+        # intent: young or warning-aged PRs cannot hide or downgrade an unverified served consumer identity.
+        instances = [] if classification == "missing_instances" else [D.B._instance(contract_hash=None)]
+        fx.snapshot["consumers"] = [D.B._consumer("api-docs", instances, deploy=D.B._deploy(NOW))]
+        add_pr(fx, 312, pr_age)
+        result = fx.m.cycle()["findings"]
+        assert len(result) == 1
+        item = result[0]
+>       assert item["classification"] == classification and item["severity"] == "critical"
+E       AssertionError: assert ('RED' == 'identity_error'
+E
+E         - identity_error
+E         + RED)
+
+ops/contract-sync/test_contract_lag_clock.py:487: AssertionError
+_ test_unverified_served_identity_stays_critical_with_open_pr_evidence[10800-missing_instances] _
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+classification = 'missing_instances', pr_age = 10800
+
+    @pytest.mark.parametrize("classification", ["identity_error", "missing_instances"])
+    @pytest.mark.parametrize("pr_age", [600, 3 * 3600])
+    def test_unverified_served_identity_stays_critical_with_open_pr_evidence(fx, classification, pr_age):
+        # intent: young or warning-aged PRs cannot hide or downgrade an unverified served consumer identity.
+        instances = [] if classification == "missing_instances" else [D.B._instance(contract_hash=None)]
+        fx.snapshot["consumers"] = [D.B._consumer("api-docs", instances, deploy=D.B._deploy(NOW))]
+        add_pr(fx, 312, pr_age)
+        result = fx.m.cycle()["findings"]
+        assert len(result) == 1
+        item = result[0]
+>       assert item["classification"] == classification and item["severity"] == "critical"
+E       AssertionError: assert ('RED' == 'missing_instances'
+E
+E         - missing_instances
+E         + RED)
+
+ops/contract-sync/test_contract_lag_clock.py:487: AssertionError
+___ test_empty_pr_set_updates_ticket_while_verified_served_lag_stays_active ____
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+
+    def test_empty_pr_set_updates_ticket_while_verified_served_lag_stays_active(fx):
+        # intent: merged PRs update the ticket's empty set without claiming recovery while the consumer still serves old bytes.
+        import html
+
+        fx.snapshot["rails"]["deployed_at"] = D.B._iso(NOW - 8 * 3600)
+        fx.snapshot["consumers"] = [D.B._consumer("api-docs", [D.B._stale()], deploy=D.B._deploy(NOW))]
+        add_pr(fx, 312, 4 * DAY)
+        fx.m.cycle()
+        assert len(fx.slack) == len(fx.issues) == 1
+        fx.prs.clear()
+        item = fx.m.cycle()["findings"][0]
+        assert item["classification"] == "behind" and item["details"]["prs"] == []
+>       assert len(fx.comments) == 1 and fx.comments[0][0] == "consumer-issue"
+E       AssertionError: assert (0 == 1)
+E        +  where 0 = len([])
+E        +    where [] = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}}).comments
+
+ops/contract-sync/test_contract_lag_clock.py:519: AssertionError
+___________ test_open_pr_collection_survives_server_page_size_clamp ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x71e6ca02e540>
+
+    def test_open_pr_collection_survives_server_page_size_clamp(monkeypatch):
+        # intent: Gitea's smaller server page size cannot hide the oldest PR beyond a short first page.
+        from urllib.parse import parse_qs, urlsplit
+
+        m = fresh_monitor()
+        pages = []
+
+        def get(path):
+            query = parse_qs(urlsplit(path).query)
+            assert query["limit"] == ["50"]
+            page = int(query["page"][0])
+            pages.append(page)
+            return {1: [{"number": i} for i in range(1, 31)], 2: [{"number": 31}]}.get(page, [])
+
+        monkeypatch.setattr(m, "gitea_get", get)
+>       assert [pr["number"] for pr in m.gitea_list_open_prs("GEN/api-docs")] == list(range(1, 32))
+E       assert [1, 2, 3, 4, 5, 6, ...] == [1, 2, 3, 4, 5, 6, ...]
+E
+E         Right contains one more item: 31
+E         Use -v to get more diff
+
+ops/contract-sync/test_contract_lag_clock.py:543: AssertionError
+=========================== short test summary info ============================
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_open_pr_collection_reads_every_page
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_large_backlog_alert_fits_slack_and_keeps_each_pr_and_full_investigation
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_unverified_served_identity_stays_critical_with_open_pr_evidence[600-identity_error]
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_unverified_served_identity_stays_critical_with_open_pr_evidence[600-missing_instances]
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_unverified_served_identity_stays_critical_with_open_pr_evidence[10800-identity_error]
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_unverified_served_identity_stays_critical_with_open_pr_evidence[10800-missing_instances]
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_empty_pr_set_updates_ticket_while_verified_served_lag_stays_active
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_open_pr_collection_survives_server_page_size_clamp
+8 failed, 29 passed in 0.49s

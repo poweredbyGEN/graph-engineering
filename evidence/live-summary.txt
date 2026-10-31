@@ -1,0 +1,7 @@
+gen-mcp-server: RED critical; age=959604s (266.56h, 11.11d); open_sync_prs=46; oldest=2026-10-20T19:41:41Z
+gen-agentic: RED critical; age=524097s (145.58h, 6.07d); open_sync_prs=28; oldest=2026-10-25T20:40:08Z
+api-docs: RED critical; age=359509s (99.86h, 4.16d); open_sync_prs=30; oldest=2026-10-27T18:23:16Z
+alert_chars=4514 service=gen-mcp-server
+alert_chars=3445 service=gen-agentic
+alert_chars=3463 service=api-docs
+DRY_RUN: skipped MiMo, no Slack or Plane writes; state/logs isolated; candidate streamed via stdin without installation.

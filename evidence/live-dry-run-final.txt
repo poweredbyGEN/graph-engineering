@@ -1,0 +1,2923 @@
+[slack] STATUS: CONTRACT_SYNC_PR_RED
+SERVICE: gen-mcp-server
+SEVERITY: critical
+AGE: 959604s (266.56h)
+SURFACE: GEN creation cards and Vidsheets consumers
+SELF_HEAL: checked:no_safe_auto_fix_mapped; merging/deploying requires review
+EVIDENCE: {"age_s": 959603.8015804291, "classification": "RED", "consumer": "gen-mcp-server", "details": {"pr_age_s": 959603.8015804291, "pr_classification": "RED", "prs": [{"classification": "RED", "failing": [{"context": "ci/woodpecker/pr/ci", "status": "failure", "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2160/1"}], "pr": {"created_at": "2026-10-31T22:02:27Z", "head": {"ref": "auto/contract-sync-f8291952", "sha": "2196865cf00f52fbd95432bbd411ad0f8dd74292"}, "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/705", "number": 705, "title": "chore: sync backend contracts to gen-backend-v2 f8291952"}}, {"classification": "RED", "failing": [{"context": "ci/woodpecker/pr/tests-2", "status": "failure", "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2158/3"}, {"context": "ci/woodpecker/pr/ci", "status": "failure", "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2158/1"}], "pr": {"created_at": "2026-10-31T20:21:59Z", "head": {"ref": "auto/contract-sync-e3a7111d", "sha": "8bb3fcc0f44b46d0d107b9b6ee3d2ce67107a3fe"}, "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/704", "number": 704, "title": "chore: sync backend contracts to gen-backend-v2 e3a7111
+#705 https://git.gen.pro/GEN/gen-mcp-server/pulls/705 RED
+#704 https://git.gen.pro/GEN/gen-mcp-server/pulls/704 RED
+#703 https://git.gen.pro/GEN/gen-mcp-server/pulls/703 RED
+#702 https://git.gen.pro/GEN/gen-mcp-server/pulls/702 RED
+#701 https://git.gen.pro/GEN/gen-mcp-server/pulls/701 RED
+#699 https://git.gen.pro/GEN/gen-mcp-server/pulls/699 RED
+#698 https://git.gen.pro/GEN/gen-mcp-server/pulls/698 RED
+#696 https://git.gen.pro/GEN/gen-mcp-server/pulls/696 RED
+#695 https://git.gen.pro/GEN/gen-mcp-server/pulls/695 RED
+#694 https://git.gen.pro/GEN/gen-mcp-server/pulls/694 RED
+#692 https://git.gen.pro/GEN/gen-mcp-server/pulls/692 RED
+#691 https://git.gen.pro/GEN/gen-mcp-server/pulls/691 RED
+#689 https://git.gen.pro/GEN/gen-mcp-server/pulls/689 RED
+#688 https://git.gen.pro/GEN/gen-mcp-server/pulls/688 RED
+#685 https://git.gen.pro/GEN/gen-mcp-server/pulls/685 RED
+#683 https://git.gen.pro/GEN/gen-mcp-server/pulls/683 RED
+#680 https://git.gen.pro/GEN/gen-mcp-server/pulls/680 RED
+#675 https://git.gen.pro/GEN/gen-mcp-server/pulls/675 RED
+#674 https://git.gen.pro/GEN/gen-mcp-server/pulls/674 RED
+#671 https://git.gen.pro/GEN/gen-mcp-server/pulls/671 RED
+#670 https://git.gen.pro/GEN/gen-mcp-server/pulls/670 RED
+#667 https://git.gen.pro/GEN/gen-mcp-server/pulls/667 RED
+#664 https://git.gen.pro/GEN/gen-mcp-server/pulls/664 RED
+#663 https://git.gen.pro/GEN/gen-mcp-server/pulls/663 RED
+#660 https://git.gen.pro/GEN/gen-mcp-server/pulls/660 RED
+#659 https://git.gen.pro/GEN/gen-mcp-server/pulls/659 RED
+#657 https://git.gen.pro/GEN/gen-mcp-server/pulls/657 RED
+#656 https://git.gen.pro/GEN/gen-mcp-server/pulls/656 RED
+#655 https://git.gen.pro/GEN/gen-mcp-server/pulls/655 RED
+#653 https://git.gen.pro/GEN/gen-mcp-server/pulls/653 RED
+#652 https://git.gen.pro/GEN/gen-mcp-server/pulls/652 RED
+#651 https://git.gen.pro/GEN/gen-mcp-server/pulls/651 RED
+#650 https://git.gen.pro/GEN/gen-mcp-server/pulls/650 RED
+#647 https://git.gen.pro/GEN/gen-mcp-server/pulls/647 RED
+#646 https://git.gen.pro/GEN/gen-mcp-server/pulls/646 RED
+#645 https://git.gen.pro/GEN/gen-mcp-server/pulls/645 RED
+#644 https://git.gen.pro/GEN/gen-mcp-server/pulls/644 RED
+#643 https://git.gen.pro/GEN/gen-mcp-server/pulls/643 RED
+#640 https://git.gen.pro/GEN/gen-mcp-server/pulls/640 RED
+#639 https://git.gen.pro/GEN/gen-mcp-server/pulls/639 RED
+#638 https://git.gen.pro/GEN/gen-mcp-server/pulls/638 RED
+#637 https://git.gen.pro/GEN/gen-mcp-server/pulls/637 RED
+#635 https://git.gen.pro/GEN/gen-mcp-server/pulls/635 RED
+#634 https://git.gen.pro/GEN/gen-mcp-server/pulls/634 RED
+#632 https://git.gen.pro/GEN/gen-mcp-server/pulls/632 RED
+#630 https://git.gen.pro/GEN/gen-mcp-server/pulls/630 RED
+RCA: mimo_rca=skipped:dry_run
+NEXT: repair blocking sync checks and deploy the canonical contract; verify missing identity stamps
+DECISION: no safe fix, evidence attached, exact next step — dry run; no ticket created
+_probe: gen-playwright-runner-ash-1:<stdin> · tail:/mnt/data/tmp/contract-sync-lag-clock-01a193f8-reviewed/log/alerts.log · state:/mnt/data/tmp/contract-sync-lag-clock-01a193f8-reviewed/state_
+[slack] STATUS: CONTRACT_SYNC_PR_RED
+SERVICE: gen-agentic
+SEVERITY: critical
+AGE: 524097s (145.58h)
+SURFACE: GEN creation cards and Vidsheets consumers
+SELF_HEAL: checked:no_safe_auto_fix_mapped; merging/deploying requires review
+EVIDENCE: {"age_s": 524096.8015804291, "classification": "RED", "consumer": "gen-agentic", "details": {"pr_age_s": 524096.8015804291, "pr_classification": "RED", "prs": [{"classification": "PENDING", "failing": [], "pr": {"created_at": "2026-10-31T22:05:33Z", "head": {"ref": "auto/contract-sync-f8291952", "sha": "d62a538b70e53cd926c25bed13667f595da87781"}, "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1193", "number": 1193, "title": "chore: sync backend contracts to gen-backend-v2 f8291952"}}, {"classification": "RED", "failing": [{"context": "ci/woodpecker/pr/shard-4", "status": "failure", "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3161/5"}, {"context": "ci/woodpecker/pr/shard-3", "status": "failure", "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3161/4"}, {"context": "ci/woodpecker/pr/shard-2", "status": "failure", "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3161/3"}, {"context": "ci/woodpecker/pr/ci", "status": "failure", "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3161/2"}], "pr": {"created_at": "2026-10-31T20:24:57Z", "head": {"ref": "auto/contract-sync-e3a7111d", "sha": "6036b5a672840de73d882de7a13c55af569a5731"}, "html_ur
+#1193 https://git.gen.pro/GEN/gen-agentic/pulls/1193 PENDING
+#1192 https://git.gen.pro/GEN/gen-agentic/pulls/1192 RED
+#1191 https://git.gen.pro/GEN/gen-agentic/pulls/1191 RED
+#1190 https://git.gen.pro/GEN/gen-agentic/pulls/1190 RED
+#1189 https://git.gen.pro/GEN/gen-agentic/pulls/1189 RED
+#1188 https://git.gen.pro/GEN/gen-agentic/pulls/1188 RED
+#1187 https://git.gen.pro/GEN/gen-agentic/pulls/1187 RED
+#1186 https://git.gen.pro/GEN/gen-agentic/pulls/1186 RED
+#1184 https://git.gen.pro/GEN/gen-agentic/pulls/1184 RED
+#1183 https://git.gen.pro/GEN/gen-agentic/pulls/1183 RED
+#1182 https://git.gen.pro/GEN/gen-agentic/pulls/1182 RED
+#1181 https://git.gen.pro/GEN/gen-agentic/pulls/1181 RED
+#1180 https://git.gen.pro/GEN/gen-agentic/pulls/1180 RED
+#1179 https://git.gen.pro/GEN/gen-agentic/pulls/1179 RED
+#1178 https://git.gen.pro/GEN/gen-agentic/pulls/1178 RED
+#1175 https://git.gen.pro/GEN/gen-agentic/pulls/1175 RED
+#1174 https://git.gen.pro/GEN/gen-agentic/pulls/1174 RED
+#1172 https://git.gen.pro/GEN/gen-agentic/pulls/1172 RED
+#1170 https://git.gen.pro/GEN/gen-agentic/pulls/1170 RED
+#1169 https://git.gen.pro/GEN/gen-agentic/pulls/1169 RED
+#1167 https://git.gen.pro/GEN/gen-agentic/pulls/1167 RED
+#1166 https://git.gen.pro/GEN/gen-agentic/pulls/1166 RED
+#1165 https://git.gen.pro/GEN/gen-agentic/pulls/1165 RED
+#1164 https://git.gen.pro/GEN/gen-agentic/pulls/1164 RED
+#1163 https://git.gen.pro/GEN/gen-agentic/pulls/1163 RED
+#1162 https://git.gen.pro/GEN/gen-agentic/pulls/1162 STALE
+#1161 https://git.gen.pro/GEN/gen-agentic/pulls/1161 RED
+#1160 https://git.gen.pro/GEN/gen-agentic/pulls/1160 RED
+RCA: mimo_rca=skipped:dry_run
+NEXT: repair blocking sync checks and deploy the canonical contract; verify missing identity stamps
+DECISION: no safe fix, evidence attached, exact next step — dry run; no ticket created
+_probe: gen-playwright-runner-ash-1:<stdin> · tail:/mnt/data/tmp/contract-sync-lag-clock-01a193f8-reviewed/log/alerts.log · state:/mnt/data/tmp/contract-sync-lag-clock-01a193f8-reviewed/state_
+[slack] STATUS: CONTRACT_SYNC_PR_RED
+SERVICE: api-docs
+SEVERITY: critical
+AGE: 359509s (99.86h)
+SURFACE: GEN creation cards and Vidsheets consumers
+SELF_HEAL: checked:no_safe_auto_fix_mapped; merging/deploying requires review
+EVIDENCE: {"age_s": 359508.8015804291, "classification": "RED", "consumer": "api-docs", "details": {"pr_age_s": 359508.8015804291, "pr_classification": "RED", "prs": [{"classification": "RED", "failing": [{"context": "ci/woodpecker/pr/ci", "status": "failure", "target_url": "https://ci-gitea.gen.pro/repos/27/pipeline/492/1"}], "pr": {"created_at": "2026-10-31T20:38:44Z", "head": {"ref": "auto/contract-sync-e3a7111d-1d56a6a7", "sha": "56d4390629abe07a4f15a4c9befd84c73bde2266"}, "html_url": "https://git.gen.pro/GEN/api-docs/pulls/323", "number": 323, "title": "chore: sync API contracts from backend e3a7111d and MCP 1d56a6a7"}}, {"classification": "RED", "failing": [{"context": "ci/woodpecker/pr/ci", "status": "failure", "target_url": "https://ci-gitea.gen.pro/repos/27/pipeline/491/1"}], "pr": {"created_at": "2026-10-31T18:21:37Z", "head": {"ref": "auto/contract-sync-32d8415e-1d56a6a7", "sha": "de9d1450f9502969c1e8589b14fc8cfb17a4719e"}, "html_url": "https://git.gen.pro/GEN/api-docs/pulls/322", "number": 322, "title": "chore: sync API contracts from backend 32d8415e and MCP 1d56a6a7"}}, {"classification": "RED", "failing": [{"context": "ci/woodpecker/pr/ci", "status": "failure", "target_url": "
+#323 https://git.gen.pro/GEN/api-docs/pulls/323 RED
+#322 https://git.gen.pro/GEN/api-docs/pulls/322 RED
+#321 https://git.gen.pro/GEN/api-docs/pulls/321 RED
+#320 https://git.gen.pro/GEN/api-docs/pulls/320 RED
+#319 https://git.gen.pro/GEN/api-docs/pulls/319 RED
+#318 https://git.gen.pro/GEN/api-docs/pulls/318 RED
+#317 https://git.gen.pro/GEN/api-docs/pulls/317 RED
+#316 https://git.gen.pro/GEN/api-docs/pulls/316 RED
+#315 https://git.gen.pro/GEN/api-docs/pulls/315 RED
+#314 https://git.gen.pro/GEN/api-docs/pulls/314 RED
+#313 https://git.gen.pro/GEN/api-docs/pulls/313 RED
+#312 https://git.gen.pro/GEN/api-docs/pulls/312 RED
+#311 https://git.gen.pro/GEN/api-docs/pulls/311 PENDING
+#310 https://git.gen.pro/GEN/api-docs/pulls/310 PENDING
+#309 https://git.gen.pro/GEN/api-docs/pulls/309 PENDING
+#308 https://git.gen.pro/GEN/api-docs/pulls/308 RED
+#307 https://git.gen.pro/GEN/api-docs/pulls/307 PENDING
+#306 https://git.gen.pro/GEN/api-docs/pulls/306 PENDING
+#305 https://git.gen.pro/GEN/api-docs/pulls/305 PENDING
+#304 https://git.gen.pro/GEN/api-docs/pulls/304 PENDING
+#303 https://git.gen.pro/GEN/api-docs/pulls/303 PENDING
+#302 https://git.gen.pro/GEN/api-docs/pulls/302 PENDING
+#301 https://git.gen.pro/GEN/api-docs/pulls/301 PENDING
+#300 https://git.gen.pro/GEN/api-docs/pulls/300 RED
+#299 https://git.gen.pro/GEN/api-docs/pulls/299 PENDING
+#298 https://git.gen.pro/GEN/api-docs/pulls/298 PENDING
+#297 https://git.gen.pro/GEN/api-docs/pulls/297 PENDING
+#296 https://git.gen.pro/GEN/api-docs/pulls/296 PENDING
+#295 https://git.gen.pro/GEN/api-docs/pulls/295 PENDING
+#294 https://git.gen.pro/GEN/api-docs/pulls/294 PENDING
+RCA: mimo_rca=skipped:dry_run
+NEXT: repair blocking sync checks and deploy the canonical contract; verify missing identity stamps
+DECISION: no safe fix, evidence attached, exact next step — dry run; no ticket created
+_probe: gen-playwright-runner-ash-1:<stdin> · tail:/mnt/data/tmp/contract-sync-lag-clock-01a193f8-reviewed/log/alerts.log · state:/mnt/data/tmp/contract-sync-lag-clock-01a193f8-reviewed/state_
+{
+  "findings": [
+    {
+      "consumer": "gen-mcp-server",
+      "details": {
+        "prs": [
+          {
+            "pr": {
+              "number": 705,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/705",
+              "title": "chore: sync backend contracts to gen-backend-v2 f8291952",
+              "created_at": "2026-10-31T22:02:27Z",
+              "head": {
+                "ref": "auto/contract-sync-f8291952",
+                "sha": "2196865cf00f52fbd95432bbd411ad0f8dd74292"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2160/1"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 704,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/704",
+              "title": "chore: sync backend contracts to gen-backend-v2 e3a7111d",
+              "created_at": "2026-10-31T20:21:59Z",
+              "head": {
+                "ref": "auto/contract-sync-e3a7111d",
+                "sha": "8bb3fcc0f44b46d0d107b9b6ee3d2ce67107a3fe"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2158/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2158/1"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 703,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/703",
+              "title": "chore: sync backend contracts to gen-backend-v2 32d8415e",
+              "created_at": "2026-10-31T18:02:32Z",
+              "head": {
+                "ref": "auto/contract-sync-32d8415e",
+                "sha": "0e87cab1fcb237f609bb7f5ded7ffe300bf7978b"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2157/3"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 702,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/702",
+              "title": "chore: sync backend contracts to gen-backend-v2 a465a0a8",
+              "created_at": "2026-10-31T11:11:23Z",
+              "head": {
+                "ref": "auto/contract-sync-a465a0a8",
+                "sha": "7e35de9cf58dfb2a3d60c657a3954706c935e7b6"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2152/3"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 701,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/701",
+              "title": "chore: sync backend contracts to gen-backend-v2 607e66fe",
+              "created_at": "2026-10-31T10:01:55Z",
+              "head": {
+                "ref": "auto/contract-sync-607e66fe",
+                "sha": "ebe632b4609a8f80a12530e82b480bf9f34ea306"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2148/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-5",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2148/6"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2148/3"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 699,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/699",
+              "title": "chore: sync backend contracts to gen-backend-v2 9d2cf0fc",
+              "created_at": "2026-10-31T09:12:50Z",
+              "head": {
+                "ref": "auto/contract-sync-9d2cf0fc",
+                "sha": "348fd1dc9110ffe257280c5cada96c819e7c9834"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2145/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-5",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2145/6"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2145/3"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 698,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/698",
+              "title": "chore: sync backend contracts to gen-backend-v2 92e2d10b",
+              "created_at": "2026-10-31T01:25:15Z",
+              "head": {
+                "ref": "auto/contract-sync-92e2d10b",
+                "sha": "0c35f7d5a630013107ee2e0d0bdbcdc630a15592"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-6",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2143/7"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-5",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2143/6"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2143/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2143/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2143/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 696,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/696",
+              "title": "chore: sync backend contracts to gen-backend-v2 779d4e6e",
+              "created_at": "2026-10-31T00:31:58Z",
+              "head": {
+                "ref": "auto/contract-sync-779d4e6e",
+                "sha": "4526e8f6a4dd0395b36a38d2201bf39150adf9de"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2140/3"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 695,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/695",
+              "title": "chore: sync backend contracts to gen-backend-v2 d07d5ae4",
+              "created_at": "2026-10-30T23:32:07Z",
+              "head": {
+                "ref": "auto/contract-sync-d07d5ae4",
+                "sha": "bb308999a0ae74a67a95f15a9f8e88d354564d16"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2139/3"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 694,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/694",
+              "title": "chore: sync backend contracts to gen-backend-v2 79ada2b0",
+              "created_at": "2026-10-30T22:21:42Z",
+              "head": {
+                "ref": "auto/contract-sync-79ada2b0",
+                "sha": "2cb516172589c9f63b7e254ed5bf08881087cac1"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2136/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2136/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2136/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-5",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2136/6"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-6",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2136/7"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 692,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/692",
+              "title": "chore: sync backend contracts to gen-backend-v2 55e0698f",
+              "created_at": "2026-10-30T20:42:14Z",
+              "head": {
+                "ref": "auto/contract-sync-55e0698f",
+                "sha": "73503d08536f5bf5abecb881cdcf3a51b10831ac"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2126/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2126/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2126/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-5",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2126/6"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-6",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2126/7"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 691,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/691",
+              "title": "chore: sync backend contracts to gen-backend-v2 d228ac8d",
+              "created_at": "2026-10-30T19:32:08Z",
+              "head": {
+                "ref": "auto/contract-sync-d228ac8d",
+                "sha": "7d73c6adc15351ea39412fe83ba6b61bfc5167de"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2123/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2123/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2123/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-6",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2123/7"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-5",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2123/6"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 689,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/689",
+              "title": "chore: sync backend contracts to gen-backend-v2 5c4a5221",
+              "created_at": "2026-10-30T15:41:40Z",
+              "head": {
+                "ref": "auto/contract-sync-5c4a5221",
+                "sha": "df0714972405d548b76343f2a59e1cf6432c6857"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-5",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2119/6"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 688,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/688",
+              "title": "chore: sync backend contracts to gen-backend-v2 43598bee",
+              "created_at": "2026-10-30T07:21:45Z",
+              "head": {
+                "ref": "auto/contract-sync-43598bee",
+                "sha": "455afb2eb6e548bd2f7f21df1ca0e9640a722f46"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-6",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2116/7"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-5",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2116/6"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2116/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2116/5"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 685,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/685",
+              "title": "chore: sync backend contracts to gen-backend-v2 39d5d6a3",
+              "created_at": "2026-10-30T02:41:43Z",
+              "head": {
+                "ref": "auto/contract-sync-39d5d6a3",
+                "sha": "a8e3996037f70a8df122a4fcc9f5c6731ac5fd81"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2105/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 683,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/683",
+              "title": "chore: sync backend contracts to gen-backend-v2 54771149",
+              "created_at": "2026-10-29T01:51:50Z",
+              "head": {
+                "ref": "auto/contract-sync-54771149",
+                "sha": "67aa350c18b1ecfaf3d9e89591d7ad54bf7e5bd8"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-6",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2093/7"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 680,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/680",
+              "title": "chore: sync backend contracts to gen-backend-v2 42384478",
+              "created_at": "2026-10-28T20:32:48Z",
+              "head": {
+                "ref": "auto/contract-sync-42384478",
+                "sha": "dca3e07ad60ba95c3e9681694ce837a5e2d27dc9"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2080/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2080/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-6",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2080/7"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-5",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2080/6"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 675,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/675",
+              "title": "chore: sync backend contracts to gen-backend-v2 6f7551c2",
+              "created_at": "2026-10-28T07:07:47Z",
+              "head": {
+                "ref": "auto/contract-sync-6f7551c2",
+                "sha": "db8ca39917d38ecf6fbd924dba120e8471c0bc08"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2056/3"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 674,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/674",
+              "title": "chore: sync backend contracts to gen-backend-v2 9ebb3bc8",
+              "created_at": "2026-10-28T06:12:24Z",
+              "head": {
+                "ref": "auto/contract-sync-9ebb3bc8",
+                "sha": "2e181972a4435677e63eb9d9163506651007fd71"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-5",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2052/6"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2052/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 671,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/671",
+              "title": "chore: sync backend contracts to gen-backend-v2 fae7a290",
+              "created_at": "2026-10-27T21:02:14Z",
+              "head": {
+                "ref": "auto/contract-sync-fae7a290",
+                "sha": "5a9ae78ebcdf26de4d4467d33b36b3313cab59cd"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-6",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2046/7"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2046/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2046/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2046/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-5",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2046/6"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 670,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/670",
+              "title": "chore: sync backend contracts to gen-backend-v2 e05ff808",
+              "created_at": "2026-10-27T17:52:43Z",
+              "head": {
+                "ref": "auto/contract-sync-e05ff808",
+                "sha": "8ed0ac3732b692df77cb95ca12c3801d57f0354d"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-6",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2041/7"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2041/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2041/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2041/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 667,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/667",
+              "title": "chore: sync backend contracts to gen-backend-v2 9a15e3cf",
+              "created_at": "2026-10-27T09:11:43Z",
+              "head": {
+                "ref": "auto/contract-sync-9a15e3cf",
+                "sha": "223fae5fdde959c29d3d167b76e868fa9e4af57a"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2023/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-5",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2023/6"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2023/4"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 664,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/664",
+              "title": "chore: sync backend contracts to gen-backend-v2 84ec11b2",
+              "created_at": "2026-10-26T18:31:29Z",
+              "head": {
+                "ref": "auto/contract-sync-84ec11b2",
+                "sha": "c892777747df0c0e9e1643ba0f44c2ad284e09d7"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2016/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-5",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2016/6"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 663,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/663",
+              "title": "chore: sync backend contracts to gen-backend-v2 eeef2243",
+              "created_at": "2026-10-26T03:41:26Z",
+              "head": {
+                "ref": "auto/contract-sync-eeef2243",
+                "sha": "7cf3b16a31b95ab2ddcb969cc29b48b410bae6b8"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-6",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2012/7"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2012/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2012/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2012/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2012/4"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 660,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/660",
+              "title": "chore: sync backend contracts to gen-backend-v2 dd8e9453",
+              "created_at": "2026-10-25T02:51:42Z",
+              "head": {
+                "ref": "auto/contract-sync-dd8e9453",
+                "sha": "517dbd85a52ed745fa82f2181e37c40463ada4c7"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2007/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 659,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/659",
+              "title": "chore: sync backend contracts to gen-backend-v2 aa692d9c",
+              "created_at": "2026-10-24T21:11:50Z",
+              "head": {
+                "ref": "auto/contract-sync-aa692d9c",
+                "sha": "7614be2e6a57d59aa18a9e0472a80618e8b996f8"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2002/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 657,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/657",
+              "title": "chore: sync backend contracts to gen-backend-v2 f1eb2433",
+              "created_at": "2026-10-24T20:11:37Z",
+              "head": {
+                "ref": "auto/contract-sync-f1eb2433",
+                "sha": "b64b0647a3af5073cc28e003794d8b916ade090a"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/2000/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 656,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/656",
+              "title": "chore: sync backend contracts to gen-backend-v2 478e3068",
+              "created_at": "2026-10-24T19:31:51Z",
+              "head": {
+                "ref": "auto/contract-sync-478e3068",
+                "sha": "6e728c8897373d1c5931a08ea0290fc7e0876c78"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1999/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 655,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/655",
+              "title": "chore: sync backend contracts to gen-backend-v2 7e0c4f31",
+              "created_at": "2026-10-24T17:51:32Z",
+              "head": {
+                "ref": "auto/contract-sync-7e0c4f31",
+                "sha": "2caba111440e050fca750637c099e98af0c2cb3a"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1998/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 653,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/653",
+              "title": "chore: sync backend contracts to gen-backend-v2 1544769f",
+              "created_at": "2026-10-23T22:11:36Z",
+              "head": {
+                "ref": "auto/contract-sync-1544769f",
+                "sha": "7c8041e69cc6b22fd463f4403f259f59ab2d13db"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1991/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1991/3"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 652,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/652",
+              "title": "chore: sync backend contracts to gen-backend-v2 796b858a",
+              "created_at": "2026-10-23T21:31:29Z",
+              "head": {
+                "ref": "auto/contract-sync-796b858a",
+                "sha": "409686978dc316f91be41e0fdd9b6c75225fb2f1"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1990/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 651,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/651",
+              "title": "chore: sync backend contracts to gen-backend-v2 70fcd09c",
+              "created_at": "2026-10-23T19:41:19Z",
+              "head": {
+                "ref": "auto/contract-sync-70fcd09c",
+                "sha": "96780ea1af0e52373ae0b17009167e2596115eb4"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1989/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 650,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/650",
+              "title": "chore: sync backend contracts to gen-backend-v2 68554d86",
+              "created_at": "2026-10-23T18:51:39Z",
+              "head": {
+                "ref": "auto/contract-sync-68554d86",
+                "sha": "de9f7153bbec1a1095e6a67ed9c62bdf3733860f"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1988/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 647,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/647",
+              "title": "chore: sync backend contracts to gen-backend-v2 2846d434",
+              "created_at": "2026-10-23T11:21:21Z",
+              "head": {
+                "ref": "auto/contract-sync-2846d434",
+                "sha": "7aeedba4180cb32c1ce16a0dfc30fa06979feedc"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-6",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1983/7"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1983/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-5",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1983/6"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1983/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1983/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1983/3"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 646,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/646",
+              "title": "chore: sync backend contracts to gen-backend-v2 be576aba",
+              "created_at": "2026-10-23T07:11:27Z",
+              "head": {
+                "ref": "auto/contract-sync-be576aba",
+                "sha": "8ac31a157e7f80d9f87ddd8b0d2e9ee95f3729ae"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-6",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1981/7"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1981/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1981/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-5",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1981/6"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1981/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1981/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 645,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/645",
+              "title": "chore: sync backend contracts to gen-backend-v2 b83c2d0f",
+              "created_at": "2026-10-23T06:21:16Z",
+              "head": {
+                "ref": "auto/contract-sync-b83c2d0f",
+                "sha": "0123d6d08e554eff9e2ac05888f0f89b6f8ba6ee"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-6",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1980/7"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1980/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1980/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-5",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1980/6"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1980/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1980/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 644,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/644",
+              "title": "chore: sync backend contracts to gen-backend-v2 0eb2529c",
+              "created_at": "2026-10-23T05:21:28Z",
+              "head": {
+                "ref": "auto/contract-sync-0eb2529c",
+                "sha": "992619416fea6dc4bcaa6b26fb558e3770d0797e"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-6",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1979/7"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1979/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-5",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1979/6"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1979/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1979/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1979/4"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 643,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/643",
+              "title": "chore: sync backend contracts to gen-backend-v2 89ddff72",
+              "created_at": "2026-10-23T03:01:26Z",
+              "head": {
+                "ref": "auto/contract-sync-89ddff72",
+                "sha": "71175358046f1bbb65a46f09186604a6c1ad4470"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-5",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1977/6"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 640,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/640",
+              "title": "chore: sync backend contracts to gen-backend-v2 61ed5505",
+              "created_at": "2026-10-23T00:21:34Z",
+              "head": {
+                "ref": "auto/contract-sync-61ed5505",
+                "sha": "2f0ef3d075dbdd4ad44fa0d7d51ee3d7be9b3094"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-6",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1972/7"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1972/4"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 639,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/639",
+              "title": "chore: sync backend contracts to gen-backend-v2 db127a0f",
+              "created_at": "2026-10-22T23:41:29Z",
+              "head": {
+                "ref": "auto/contract-sync-db127a0f",
+                "sha": "6c5b00443b7c49add1d7290d35dc1acab36143c3"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1971/4"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 638,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/638",
+              "title": "chore: sync backend contracts to gen-backend-v2 8fba8712",
+              "created_at": "2026-10-22T22:01:43Z",
+              "head": {
+                "ref": "auto/contract-sync-8fba8712",
+                "sha": "693b4e90999812602fd24bf16c4ac7778fb7eeb3"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1970/4"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 637,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/637",
+              "title": "chore: sync backend contracts to gen-backend-v2 d557d3f3",
+              "created_at": "2026-10-22T19:11:38Z",
+              "head": {
+                "ref": "auto/contract-sync-d557d3f3",
+                "sha": "c58472ec22f6364dad304e0ccefe9c3ceb14a717"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1969/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/tests-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1969/4"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 635,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/635",
+              "title": "chore: sync backend contracts to gen-backend-v2 0088e89d",
+              "created_at": "2026-10-22T03:41:39Z",
+              "head": {
+                "ref": "auto/contract-sync-0088e89d",
+                "sha": "aa6f899c92f536234b6c649cd3e18279ff517b94"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1965/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 634,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/634",
+              "title": "chore: sync backend contracts to gen-backend-v2 344705f8",
+              "created_at": "2026-10-22T02:41:25Z",
+              "head": {
+                "ref": "auto/contract-sync-344705f8",
+                "sha": "ade0b21964ac8ba36fa03f36d780cacdab01994e"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/tests-1",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1964/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 632,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/632",
+              "title": "chore: sync backend contracts to gen-backend-v2 576beb3e",
+              "created_at": "2026-10-20T22:31:17Z",
+              "head": {
+                "ref": "auto/contract-sync-576beb3e",
+                "sha": "898c8eaeb6fcace51b818428ee9d562234da0170"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1944/1"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 630,
+              "html_url": "https://git.gen.pro/GEN/gen-mcp-server/pulls/630",
+              "title": "chore: sync backend contracts to gen-backend-v2 eacfc72e",
+              "created_at": "2026-10-20T19:41:41Z",
+              "head": {
+                "ref": "auto/contract-sync-eacfc72e",
+                "sha": "a0f6e1d17dfbd402eb31ebee756cc80b1048f1ca"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/62/pipeline/1935/1"
+              }
+            ]
+          }
+        ],
+        "pr_age_s": 959603.8015804291,
+        "pr_classification": "RED"
+      },
+      "classification": "RED",
+      "age_s": 959603.8015804291,
+      "severity": "critical"
+    },
+    {
+      "consumer": "gen-agentic",
+      "details": {
+        "prs": [
+          {
+            "pr": {
+              "number": 1193,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1193",
+              "title": "chore: sync backend contracts to gen-backend-v2 f8291952",
+              "created_at": "2026-10-31T22:05:33Z",
+              "head": {
+                "ref": "auto/contract-sync-f8291952",
+                "sha": "d62a538b70e53cd926c25bed13667f595da87781"
+              }
+            },
+            "classification": "PENDING",
+            "failing": []
+          },
+          {
+            "pr": {
+              "number": 1192,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1192",
+              "title": "chore: sync backend contracts to gen-backend-v2 e3a7111d",
+              "created_at": "2026-10-31T20:24:57Z",
+              "head": {
+                "ref": "auto/contract-sync-e3a7111d",
+                "sha": "6036b5a672840de73d882de7a13c55af569a5731"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3161/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3161/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3161/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3161/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1191,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1191",
+              "title": "chore: sync backend contracts to gen-backend-v2 32d8415e",
+              "created_at": "2026-10-31T18:18:23Z",
+              "head": {
+                "ref": "auto/contract-sync-32d8415e",
+                "sha": "f5f0edeb2c1c522485add761d8173097b2f38f7c"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3160/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3160/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3160/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3160/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1190,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1190",
+              "title": "chore: sync backend contracts to gen-backend-v2 a465a0a8",
+              "created_at": "2026-10-31T11:22:53Z",
+              "head": {
+                "ref": "auto/contract-sync-a465a0a8",
+                "sha": "479effd0f611bf4c3568a96743287594ef9d7fc4"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3158/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3158/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3158/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3158/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1189,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1189",
+              "title": "chore: sync backend contracts to gen-backend-v2 607e66fe",
+              "created_at": "2026-10-31T10:14:58Z",
+              "head": {
+                "ref": "auto/contract-sync-607e66fe",
+                "sha": "d137fd0e88c114b4ad3780bb1a299fa692265f11"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3157/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3157/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3157/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3157/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1188,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1188",
+              "title": "chore: sync backend contracts to gen-backend-v2 9d2cf0fc",
+              "created_at": "2026-10-31T09:27:21Z",
+              "head": {
+                "ref": "auto/contract-sync-9d2cf0fc",
+                "sha": "4ea964f01eb0a264b95b89807f57fabbf545f938"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3155/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3155/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3155/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3155/5"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1187,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1187",
+              "title": "chore: sync backend contracts to gen-backend-v2 92e2d10b",
+              "created_at": "2026-10-31T01:30:03Z",
+              "head": {
+                "ref": "auto/contract-sync-92e2d10b",
+                "sha": "a42f3d21c7cc3cc1543a91c8e672c06590979505"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3152/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3152/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3152/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3152/3"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1186,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1186",
+              "title": "chore: sync backend contracts to gen-backend-v2 779d4e6e",
+              "created_at": "2026-10-31T00:43:51Z",
+              "head": {
+                "ref": "auto/contract-sync-779d4e6e",
+                "sha": "125ca075b5ef17758177950274b0db193e17c7c7"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3148/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3148/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3148/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3148/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1184,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1184",
+              "title": "chore: sync backend contracts to gen-backend-v2 d07d5ae4",
+              "created_at": "2026-10-30T23:47:50Z",
+              "head": {
+                "ref": "auto/contract-sync-d07d5ae4",
+                "sha": "a311d54311ae0ec51f22754099275dec791e7e2f"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3145/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3145/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3145/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3145/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1183,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1183",
+              "title": "chore: sync backend contracts to gen-backend-v2 79ada2b0",
+              "created_at": "2026-10-30T22:36:18Z",
+              "head": {
+                "ref": "auto/contract-sync-79ada2b0",
+                "sha": "52fcd3e0064cb73292429737e253947e1f3335af"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3144/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3144/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3144/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3144/3"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1182,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1182",
+              "title": "chore: sync backend contracts to gen-backend-v2 55e0698f",
+              "created_at": "2026-10-30T20:58:01Z",
+              "head": {
+                "ref": "auto/contract-sync-55e0698f",
+                "sha": "89d62cbce4f575f89318403424db2b390b033f9f"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3143/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3143/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3143/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3143/3"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1181,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1181",
+              "title": "chore: sync backend contracts to gen-backend-v2 d228ac8d",
+              "created_at": "2026-10-30T19:48:03Z",
+              "head": {
+                "ref": "auto/contract-sync-d228ac8d",
+                "sha": "fc25331fe9f55bfc03cdcc8cf027b0706ff4d6bf"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3142/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3142/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3142/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3142/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1180,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1180",
+              "title": "chore: sync backend contracts to gen-backend-v2 5c4a5221",
+              "created_at": "2026-10-30T15:54:46Z",
+              "head": {
+                "ref": "auto/contract-sync-5c4a5221",
+                "sha": "307cdd70c794eca1a01ff3cabc473a31c2ab5298"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3141/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3141/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3141/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3141/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1179,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1179",
+              "title": "chore: sync backend contracts to gen-backend-v2 43598bee",
+              "created_at": "2026-10-30T07:32:54Z",
+              "head": {
+                "ref": "auto/contract-sync-43598bee",
+                "sha": "19229458a99a7928ba9ce6e3196763d9375f9dc5"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3140/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1178,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1178",
+              "title": "chore: sync backend contracts to gen-backend-v2 39d5d6a3",
+              "created_at": "2026-10-30T02:51:58Z",
+              "head": {
+                "ref": "auto/contract-sync-39d5d6a3",
+                "sha": "531f84bcacf9325d8d884e8815f051bbb8563268"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3139/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1175,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1175",
+              "title": "chore: sync backend contracts to gen-backend-v2 54771149",
+              "created_at": "2026-10-29T02:01:30Z",
+              "head": {
+                "ref": "auto/contract-sync-54771149",
+                "sha": "eee19f97c74f1e33c589e23410bfe7b8bc1c4ec1"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3129/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1174,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1174",
+              "title": "chore: sync backend contracts to gen-backend-v2 42384478",
+              "created_at": "2026-10-28T20:48:49Z",
+              "head": {
+                "ref": "auto/contract-sync-42384478",
+                "sha": "0d8ca0eac1a86115df332eb4f774339868292620"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3117/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3117/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3117/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3117/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/checks",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3117/1"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1172,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1172",
+              "title": "chore: sync backend contracts to gen-backend-v2 64e9e6b5",
+              "created_at": "2026-10-28T16:58:18Z",
+              "head": {
+                "ref": "auto/contract-sync-64e9e6b5",
+                "sha": "2fa722bd3a578c0be68234904a2715eec5e7ecb1"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3111/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3111/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3111/3"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1170,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1170",
+              "title": "chore: sync backend contracts to gen-backend-v2 6f7551c2",
+              "created_at": "2026-10-28T07:23:32Z",
+              "head": {
+                "ref": "auto/contract-sync-6f7551c2",
+                "sha": "e917ed24143bdd8ca21f7d2bbf1f41a59ad3dff4"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3102/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3102/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3102/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3102/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1169,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1169",
+              "title": "chore: sync backend contracts to gen-backend-v2 9ebb3bc8",
+              "created_at": "2026-10-28T06:28:11Z",
+              "head": {
+                "ref": "auto/contract-sync-9ebb3bc8",
+                "sha": "d680c214d3507e4cacbcbdc8a828a7402156134a"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3098/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3098/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3098/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3098/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1167,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1167",
+              "title": "chore: sync backend contracts to gen-backend-v2 f3e64e20",
+              "created_at": "2026-10-28T01:14:04Z",
+              "head": {
+                "ref": "auto/contract-sync-f3e64e20",
+                "sha": "426aa0c205264b32357096e9c964c0f312fd19a2"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3093/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3093/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3093/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3093/5"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1166,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1166",
+              "title": "chore: sync backend contracts to gen-backend-v2 fae7a290",
+              "created_at": "2026-10-27T21:18:14Z",
+              "head": {
+                "ref": "auto/contract-sync-fae7a290",
+                "sha": "15779ecc1bf81eb3aca69c1788652af29957c079"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3092/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3092/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3092/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3092/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1165,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1165",
+              "title": "chore: sync backend contracts to gen-backend-v2 e05ff808",
+              "created_at": "2026-10-27T18:08:58Z",
+              "head": {
+                "ref": "auto/contract-sync-e05ff808",
+                "sha": "1d9ac02f768ba383a0761464ec5473a6c2cd0652"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3090/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3090/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3090/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3090/2"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1164,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1164",
+              "title": "chore: sync backend contracts to gen-backend-v2 9a15e3cf",
+              "created_at": "2026-10-27T09:21:39Z",
+              "head": {
+                "ref": "auto/contract-sync-9a15e3cf",
+                "sha": "486740d605f7e9d996aaabe1f4fb4679fc59cde5"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3089/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3089/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3089/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3089/4"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1163,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1163",
+              "title": "chore: sync backend contracts to gen-backend-v2 cd285674",
+              "created_at": "2026-10-26T20:31:59Z",
+              "head": {
+                "ref": "auto/contract-sync-cd285674",
+                "sha": "2771f3e04d38fd40c27127370132c600fb25978e"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3088/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3088/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3088/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3088/3"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1162,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1162",
+              "title": "chore: sync backend contracts to gen-backend-v2 84ec11b2",
+              "created_at": "2026-10-26T18:39:36Z",
+              "head": {
+                "ref": "auto/contract-sync-84ec11b2",
+                "sha": "0dfd91c462440cea91f9ef087840a1e4d224a62b"
+              }
+            },
+            "classification": "STALE",
+            "failing": []
+          },
+          {
+            "pr": {
+              "number": 1161,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1161",
+              "title": "chore: sync backend contracts to gen-backend-v2 eeef2243",
+              "created_at": "2026-10-26T03:44:21Z",
+              "head": {
+                "ref": "auto/contract-sync-eeef2243",
+                "sha": "3967feab584aa6e4d42d0865436fb0d8623629f2"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3085/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3085/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3085/4"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3085/3"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 1160,
+              "html_url": "https://git.gen.pro/GEN/gen-agentic/pulls/1160",
+              "title": "chore: sync backend contracts to gen-backend-v2 d4dfc109",
+              "created_at": "2026-10-25T20:40:08Z",
+              "head": {
+                "ref": "auto/contract-sync-d4dfc109",
+                "sha": "4af78117e3c4dd35461518172a6e739d983aec95"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/shard-4",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3084/5"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-2",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3084/3"
+              },
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3084/2"
+              },
+              {
+                "context": "ci/woodpecker/pr/shard-3",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/48/pipeline/3084/4"
+              }
+            ]
+          }
+        ],
+        "pr_age_s": 524096.8015804291,
+        "pr_classification": "RED"
+      },
+      "classification": "RED",
+      "age_s": 524096.8015804291,
+      "severity": "critical"
+    },
+    {
+      "consumer": "api-docs",
+      "details": {
+        "prs": [
+          {
+            "pr": {
+              "number": 323,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/323",
+              "title": "chore: sync API contracts from backend e3a7111d and MCP 1d56a6a7",
+              "created_at": "2026-10-31T20:38:44Z",
+              "head": {
+                "ref": "auto/contract-sync-e3a7111d-1d56a6a7",
+                "sha": "56d4390629abe07a4f15a4c9befd84c73bde2266"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/27/pipeline/492/1"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 322,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/322",
+              "title": "chore: sync API contracts from backend 32d8415e and MCP 1d56a6a7",
+              "created_at": "2026-10-31T18:21:37Z",
+              "head": {
+                "ref": "auto/contract-sync-32d8415e-1d56a6a7",
+                "sha": "de9d1450f9502969c1e8589b14fc8cfb17a4719e"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/27/pipeline/491/1"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 321,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/321",
+              "title": "chore: sync API contracts from backend a465a0a8 and MCP 1d56a6a7",
+              "created_at": "2026-10-31T11:33:00Z",
+              "head": {
+                "ref": "auto/contract-sync-a465a0a8-1d56a6a7",
+                "sha": "75cfa10d64ceeada2a422b6c3d9766778a24c19a"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/27/pipeline/489/1"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 320,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/320",
+              "title": "chore: sync API contracts from backend 607e66fe and MCP 1d56a6a7",
+              "created_at": "2026-10-31T10:43:30Z",
+              "head": {
+                "ref": "auto/contract-sync-607e66fe-1d56a6a7",
+                "sha": "03fb176986b0922e08fc00200a65c0a6d50caa9a"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/27/pipeline/488/1"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 319,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/319",
+              "title": "chore: sync API contracts from backend 607e66fe and MCP 94d952e7",
+              "created_at": "2026-10-31T10:28:35Z",
+              "head": {
+                "ref": "auto/contract-sync-607e66fe-94d952e7",
+                "sha": "ab05669f63320a0dfaac00a7de486cde2f016ae5"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/27/pipeline/486/1"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 318,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/318",
+              "title": "chore: sync API contracts from backend 9d2cf0fc and MCP 94d952e7",
+              "created_at": "2026-10-31T09:28:19Z",
+              "head": {
+                "ref": "auto/contract-sync-9d2cf0fc-94d952e7",
+                "sha": "afecd050c4968e83ab752e547797f69e84142fed"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/27/pipeline/485/1"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 317,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/317",
+              "title": "chore: sync API contracts from backend 92e2d10b and MCP 94d952e7",
+              "created_at": "2026-10-31T01:32:01Z",
+              "head": {
+                "ref": "auto/contract-sync-92e2d10b-94d952e7",
+                "sha": "21fefcc88523822df1720e9b9cfd26814500c888"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/27/pipeline/484/1"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 316,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/316",
+              "title": "chore: sync API contracts from backend 779d4e6e and MCP 94d952e7",
+              "created_at": "2026-10-31T00:59:31Z",
+              "head": {
+                "ref": "auto/contract-sync-779d4e6e-94d952e7",
+                "sha": "e23e808bc3ec9dc008d35edd692c6fef880c8852"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/27/pipeline/483/1"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 315,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/315",
+              "title": "chore: sync API contracts from backend d07d5ae4 and MCP 94d952e7",
+              "created_at": "2026-10-31T00:03:18Z",
+              "head": {
+                "ref": "auto/contract-sync-d07d5ae4-94d952e7",
+                "sha": "5f9abcb56011537b07199dac72c6517835571ce7"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/27/pipeline/482/1"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 314,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/314",
+              "title": "chore: sync API contracts from backend 79ada2b0 and MCP 94d952e7",
+              "created_at": "2026-10-30T22:40:22Z",
+              "head": {
+                "ref": "auto/contract-sync-79ada2b0-94d952e7",
+                "sha": "ac1d6bdc92bd3af382998a98a82d2e3144bfeaec"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/27/pipeline/481/1"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 313,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/313",
+              "title": "chore: sync API contracts from backend 79ada2b0 and MCP fa93a56e",
+              "created_at": "2026-10-30T22:37:18Z",
+              "head": {
+                "ref": "auto/contract-sync-79ada2b0-fa93a56e",
+                "sha": "b2d72dddb3aaeab66cee646dbf9459eae651614d"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/27/pipeline/480/1"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 312,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/312",
+              "title": "chore: sync API contracts from backend 55e0698f and MCP fa93a56e",
+              "created_at": "2026-10-30T21:07:56Z",
+              "head": {
+                "ref": "auto/contract-sync-55e0698f-fa93a56e",
+                "sha": "934622eec8a8d676c24b37ae798af7211308ce97"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/27/pipeline/479/1"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 311,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/311",
+              "title": "chore: sync API contracts from backend 5c4a5221 and MCP fa93a56e",
+              "created_at": "2026-10-30T15:56:04Z",
+              "head": {
+                "ref": "auto/contract-sync-5c4a5221-fa93a56e",
+                "sha": "1eab62de84bf667fc6addc3cf3799ecd7d3740a5"
+              }
+            },
+            "classification": "PENDING",
+            "failing": []
+          },
+          {
+            "pr": {
+              "number": 310,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/310",
+              "title": "chore: sync API contracts from backend 43598bee and MCP fa93a56e",
+              "created_at": "2026-10-30T08:17:59Z",
+              "head": {
+                "ref": "auto/contract-sync-43598bee-fa93a56e",
+                "sha": "1edcb4ecf7794bd3405fd401fbf80981d20ad953"
+              }
+            },
+            "classification": "PENDING",
+            "failing": []
+          },
+          {
+            "pr": {
+              "number": 309,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/309",
+              "title": "chore: sync API contracts from backend 43598bee and MCP 2511438c",
+              "created_at": "2026-10-30T08:00:05Z",
+              "head": {
+                "ref": "auto/contract-sync-43598bee-2511438c",
+                "sha": "0ef5d41ab27834ea9bf4aa93205bb9175645b3e4"
+              }
+            },
+            "classification": "PENDING",
+            "failing": []
+          },
+          {
+            "pr": {
+              "number": 308,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/308",
+              "title": "chore: sync API contracts from backend 39d5d6a3 and MCP 2511438c",
+              "created_at": "2026-10-30T04:42:33Z",
+              "head": {
+                "ref": "auto/contract-sync-39d5d6a3-2511438c",
+                "sha": "d036698621ef31efed12a546514ac23f59072876"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/27/pipeline/474/1"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 307,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/307",
+              "title": "chore: sync API contracts from backend 39d5d6a3 and MCP 9697c462",
+              "created_at": "2026-10-30T03:05:45Z",
+              "head": {
+                "ref": "auto/contract-sync-39d5d6a3-9697c462",
+                "sha": "701feca3d887659583b8b6f836eb52683cfea07f"
+              }
+            },
+            "classification": "PENDING",
+            "failing": []
+          },
+          {
+            "pr": {
+              "number": 306,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/306",
+              "title": "chore: sync API contracts from backend 54771149 and MCP 9697c462",
+              "created_at": "2026-10-29T03:52:18Z",
+              "head": {
+                "ref": "auto/contract-sync-54771149-9697c462",
+                "sha": "913f60a5521c00c95e8316c84be85dd98c87b04e"
+              }
+            },
+            "classification": "PENDING",
+            "failing": []
+          },
+          {
+            "pr": {
+              "number": 305,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/305",
+              "title": "chore: sync API contracts from backend 54771149 and MCP 4275e48e",
+              "created_at": "2026-10-29T03:13:16Z",
+              "head": {
+                "ref": "auto/contract-sync-54771149-4275e48e",
+                "sha": "8e84c0a23808d8d760149a46db622d30e06df93d"
+              }
+            },
+            "classification": "PENDING",
+            "failing": []
+          },
+          {
+            "pr": {
+              "number": 304,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/304",
+              "title": "chore: sync API contracts from backend 54771149 and MCP 133310e7",
+              "created_at": "2026-10-29T02:17:08Z",
+              "head": {
+                "ref": "auto/contract-sync-54771149-133310e7",
+                "sha": "1f73e5c11e9f5e4972ac051f48ad0872339f0821"
+              }
+            },
+            "classification": "PENDING",
+            "failing": []
+          },
+          {
+            "pr": {
+              "number": 303,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/303",
+              "title": "chore: sync API contracts from backend 42384478 and MCP 133310e7",
+              "created_at": "2026-10-29T00:23:15Z",
+              "head": {
+                "ref": "auto/contract-sync-42384478-133310e7",
+                "sha": "734654565c59ef0a9785a4762c5b5ec37229b1ee"
+              }
+            },
+            "classification": "PENDING",
+            "failing": []
+          },
+          {
+            "pr": {
+              "number": 302,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/302",
+              "title": "chore: sync API contracts from backend 42384478 and MCP 81559dc7",
+              "created_at": "2026-10-28T20:58:53Z",
+              "head": {
+                "ref": "auto/contract-sync-42384478-81559dc7",
+                "sha": "c5373348c63cb02f333e75802165324912b5a0c3"
+              }
+            },
+            "classification": "PENDING",
+            "failing": []
+          },
+          {
+            "pr": {
+              "number": 301,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/301",
+              "title": "chore: sync API contracts from backend 64e9e6b5 and MCP 81559dc7",
+              "created_at": "2026-10-28T19:56:37Z",
+              "head": {
+                "ref": "auto/contract-sync-64e9e6b5-81559dc7",
+                "sha": "398fc48aebc6c27111aa3c53a0b5ac56959110ab"
+              }
+            },
+            "classification": "PENDING",
+            "failing": []
+          },
+          {
+            "pr": {
+              "number": 300,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/300",
+              "title": "chore: sync API contracts from backend 64e9e6b5 and MCP e5bbfc08",
+              "created_at": "2026-10-28T17:14:03Z",
+              "head": {
+                "ref": "auto/contract-sync-64e9e6b5-e5bbfc08",
+                "sha": "b83fb230db9972309c29a3da991baca43bf51c95"
+              }
+            },
+            "classification": "RED",
+            "failing": [
+              {
+                "context": "ci/woodpecker/pr/ci",
+                "status": "failure",
+                "target_url": "https://ci-gitea.gen.pro/repos/27/pipeline/465/1"
+              }
+            ]
+          },
+          {
+            "pr": {
+              "number": 299,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/299",
+              "title": "chore: sync API contracts from backend 6f7551c2 and MCP e5bbfc08",
+              "created_at": "2026-10-28T10:31:58Z",
+              "head": {
+                "ref": "auto/contract-sync-6f7551c2-e5bbfc08",
+                "sha": "69d9a61b5348b196253473b6651db79c4568f521"
+              }
+            },
+            "classification": "PENDING",
+            "failing": []
+          },
+          {
+            "pr": {
+              "number": 298,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/298",
+              "title": "chore: sync API contracts from backend 6f7551c2 and MCP 00fe640a",
+              "created_at": "2026-10-28T07:35:17Z",
+              "head": {
+                "ref": "auto/contract-sync-6f7551c2-00fe640a",
+                "sha": "e19bccf88d228104866566f4ff7b66ba09314f2d"
+              }
+            },
+            "classification": "PENDING",
+            "failing": []
+          },
+          {
+            "pr": {
+              "number": 297,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/297",
+              "title": "chore: sync API contracts from backend 9ebb3bc8 and MCP 09778f6b",
+              "created_at": "2026-10-28T06:43:53Z",
+              "head": {
+                "ref": "auto/contract-sync-9ebb3bc8-09778f6b",
+                "sha": "a15710006ee741fbf1cf298f51a87c6881ccf5cb"
+              }
+            },
+            "classification": "PENDING",
+            "failing": []
+          },
+          {
+            "pr": {
+              "number": 296,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/296",
+              "title": "chore: sync API contracts from backend f3e64e20 and MCP 09778f6b",
+              "created_at": "2026-10-28T01:15:28Z",
+              "head": {
+                "ref": "auto/contract-sync-f3e64e20-09778f6b",
+                "sha": "e2178b4c14423806a15ba7f3f80d3d1180991efc"
+              }
+            },
+            "classification": "PENDING",
+            "failing": []
+          },
+          {
+            "pr": {
+              "number": 295,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/295",
+              "title": "chore: sync API contracts from backend fae7a290 and MCP 09778f6b",
+              "created_at": "2026-10-27T21:31:18Z",
+              "head": {
+                "ref": "auto/contract-sync-fae7a290-09778f6b",
+                "sha": "6f7bead5cb2b826d05bb224b7e0efca352e919b1"
+              }
+            },
+            "classification": "PENDING",
+            "failing": []
+          },
+          {
+            "pr": {
+              "number": 294,
+              "html_url": "https://git.gen.pro/GEN/api-docs/pulls/294",
+              "title": "chore: sync API contracts from backend e05ff808 and MCP 09778f6b",
+              "created_at": "2026-10-27T18:23:16Z",
+              "head": {
+                "ref": "auto/contract-sync-e05ff808-09778f6b",
+                "sha": "62d6fd79841dfec46595b9e0ab39f0592cae6b21"
+              }
+            },
+            "classification": "PENDING",
+            "failing": []
+          }
+        ],
+        "pr_age_s": 359508.8015804291,
+        "pr_classification": "RED"
+      },
+      "classification": "RED",
+      "age_s": 359508.8015804291,
+      "severity": "critical"
+    }
+  ],
+  "snapshot": {
+    "rails": {
+      "main_sha": "f82919522a39504f9e0ae09dc06cfc140bdca9ea",
+      "main_contract_version": "d1558758deac6b39111feedfb9f83d7003812c3ecfd45943e780c6250d8cd7d6",
+      "main_contract_hash": "39b231a2382535bbd45558dbd3f42ed57064987012da8862e98c8b57cdf547ca",
+      "deployed_sha": "f82919522a39504f9e0ae09dc06cfc140bdca9ea",
+      "contract_version": "d1558758deac6b39111feedfb9f83d7003812c3ecfd45943e780c6250d8cd7d6",
+      "contract_hash": "39b231a2382535bbd45558dbd3f42ed57064987012da8862e98c8b57cdf547ca",
+      "deployed_at": 1793483772.8662245
+    },
+    "consumers": [
+      {
+        "name": "gen-mcp-server",
+        "instances": [
+          {
+            "unit": "gen-mcp-hosted@8090.service",
+            "contract_version": "d1558758deac6b39111feedfb9f83d7003812c3ecfd45943e780c6250d8cd7d6",
+            "producer_sha": "9d2cf0fc6863e8d6a0e6f99a398e9566e70d87e4",
+            "contract_hash": "39b231a2382535bbd45558dbd3f42ed57064987012da8862e98c8b57cdf547ca",
+            "deploy_sha": "1d56a6a70da6592735b78f6f2425eab9fce7689d",
+            "commits_behind": 20
+          },
+          {
+            "unit": "gen-mcp-hosted@8092.service",
+            "contract_version": "d1558758deac6b39111feedfb9f83d7003812c3ecfd45943e780c6250d8cd7d6",
+            "producer_sha": "9d2cf0fc6863e8d6a0e6f99a398e9566e70d87e4",
+            "contract_hash": "39b231a2382535bbd45558dbd3f42ed57064987012da8862e98c8b57cdf547ca",
+            "deploy_sha": "1d56a6a70da6592735b78f6f2425eab9fce7689d",
+            "commits_behind": 20
+          }
+        ],
+        "deploy": {
+          "repo": "GEN/gen-mcp-server",
+          "enabled": true,
+          "trigger": "push",
+          "branch": "main",
+          "in_sync": true,
+          "behind_by": 0,
+          "queue": 0,
+          "last_status": "success",
+          "last_sha": "1d56a6a70da6592735b78f6f2425eab9fce7689d",
+          "last_deployed_sha": "1d56a6a70da6592735b78f6f2425eab9fce7689d",
+          "at": 1793443214.749749,
+          "secs": 136,
+          "last_good_sha": "1d56a6a70da6592735b78f6f2425eab9fce7689d",
+          "reason": null,
+          "rollback_status": null,
+          "smoke_video_type": 0,
+          "state_error": null,
+          "train_interval_seconds": 0,
+          "next_train_at": null,
+          "seconds_until_next_train": 0,
+          "debounce_secs": 90,
+          "branch_head": "1d56a6a70da6",
+          "explain": "Idle & IN SYNC. Deployed sha == main head (1d56a6a7) \u2014 fully live."
+        }
+      },
+      {
+        "name": "gen-agentic",
+        "instances": [
+          {
+            "unit": "gen-agentic.service",
+            "contract_version": null,
+            "producer_sha": null,
+            "contract_hash": "2720df07a2a9df593f79c400e4f0778f6b70f7f181d653511ea2bcbfe6eed696",
+            "deploy_sha": "2b753c8ce089ebc4a9857df192b07680eb15845d",
+            "commits_behind": null,
+            "identity_error": "missing_agentic_contract_version_and_producer_sha"
+          }
+        ],
+        "deploy": {
+          "repo": "GEN/gen-agentic",
+          "enabled": true,
+          "trigger": "push",
+          "branch": "main",
+          "in_sync": true,
+          "behind_by": 0,
+          "queue": 0,
+          "last_status": "success",
+          "last_sha": "2b753c8ce089ebc4a9857df192b07680eb15845d",
+          "last_deployed_sha": "2b753c8ce089ebc4a9857df192b07680eb15845d",
+          "at": 1793313125.9387138,
+          "secs": 194,
+          "last_good_sha": "2b753c8ce089ebc4a9857df192b07680eb15845d",
+          "reason": null,
+          "rollback_status": null,
+          "smoke_video_type": 6,
+          "state_error": null,
+          "train_interval_seconds": 0,
+          "next_train_at": null,
+          "seconds_until_next_train": 0,
+          "debounce_secs": 90,
+          "branch_head": "2b753c8ce089",
+          "explain": "Idle & IN SYNC. Deployed sha == main head (2b753c8c) \u2014 fully live."
+        }
+      }
+    ],
+    "sync": {
+      "last_success": null,
+      "source_sha": null,
+      "error": "missing_last_success",
+      "result": "success"
+    }
+  }
+}

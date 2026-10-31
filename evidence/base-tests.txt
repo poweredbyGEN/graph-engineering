@@ -1,0 +1,316 @@
+FFFFFFF.FFFFFFFFF                                                        [100%]
+=================================== FAILURES ===================================
+________ test_four_day_backlog_survives_recent_rails_and_pending_newest ________
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+
+    def test_four_day_backlog_survives_recent_rails_and_pending_newest(fx):
+        # intent: a new Rails deploy and pending newest PR cannot hide four days of red consumer backlog.
+        backlog(fx)
+        result = fx.m.cycle()["findings"]
+>       assert len(result) == 1
+E       assert 0 == 1
+E        +  where 0 = len([])
+
+ops/contract-sync/test_contract_lag_clock.py:79: AssertionError
+__________ test_pending_newest_turns_red_without_repost_or_new_ticket __________
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+
+    def test_pending_newest_turns_red_without_repost_or_new_ticket(fx):
+        # intent: changing a non-worst PR state keeps the same delivered consumer incident and cadence.
+        backlog(fx)
+        fx.m.cycle()
+>       assert len(fx.issues) == 1
+E       AssertionError: assert 0 == 1
+E        +  where 0 = len([])
+E        +    where [] = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}}).issues
+
+ops/contract-sync/test_contract_lag_clock.py:98: AssertionError
+_______ test_recovery_requires_no_open_pr_and_prior_accepted_alert[True] _______
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+posted = True
+
+    @pytest.mark.parametrize("posted", [True, False])
+    def test_recovery_requires_no_open_pr_and_prior_accepted_alert(fx, posted):
+        # intent: pending open PRs hold an incident; only an empty backlog resolves a posted incident once.
+        backlog(fx)
+        fx.m.cycle()
+        state = json.loads(fx.m.INCIDENTS_FILE.read_text())
+>       state["api-docs"]["posted"] = posted
+        ^^^^^^^^^^^^^^^^^
+E       KeyError: 'api-docs'
+
+ops/contract-sync/test_contract_lag_clock.py:113: KeyError
+______ test_recovery_requires_no_open_pr_and_prior_accepted_alert[False] _______
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+posted = False
+
+    @pytest.mark.parametrize("posted", [True, False])
+    def test_recovery_requires_no_open_pr_and_prior_accepted_alert(fx, posted):
+        # intent: pending open PRs hold an incident; only an empty backlog resolves a posted incident once.
+        backlog(fx)
+        fx.m.cycle()
+        state = json.loads(fx.m.INCIDENTS_FILE.read_text())
+>       state["api-docs"]["posted"] = posted
+        ^^^^^^^^^^^^^^^^^
+E       KeyError: 'api-docs'
+
+ops/contract-sync/test_contract_lag_clock.py:113: KeyError
+________________ test_three_hour_warning_escalates_at_24h_once _________________
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+
+    def test_three_hour_warning_escalates_at_24h_once(fx):
+        # intent: PR age creates warning at three hours and exactly one critical repost/ticket at 24 hours.
+        add_pr(fx, 312, 3 * 3600)
+>       item = fx.m.cycle()["findings"][0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       IndexError: list index out of range
+
+ops/contract-sync/test_contract_lag_clock.py:131: IndexError
+___ test_twelve_red_prs_create_one_consumer_ticket_and_preserve_legacy_rows ____
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+
+    def test_twelve_red_prs_create_one_consumer_ticket_and_preserve_legacy_rows(fx):
+        # intent: the ticket map retains old PR rows while twelve blocked PRs create only one consumer ticket.
+        legacy = {"https://git.invalid/GEN/api-docs/pulls/1": {
+            "issue_id": "legacy", "head_sha": "a" * 40, "url": "https://plane.invalid/legacy",
+        }}
+        fx.m.TICKETS_FILE.write_text(json.dumps(legacy))
+        for number in range(312, 324):
+            add_pr(fx, number, 4 * DAY)
+        fx.m.cycle()
+        fx.clock.now += 600
+        fx.m.cycle()
+>       assert len(fx.issues) == 1
+E       AssertionError: assert 0 == 1
+E        +  where 0 = len([])
+E        +    where [] = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}}).issues
+
+ops/contract-sync/test_contract_lag_clock.py:154: AssertionError
+__ test_ticket_comments_track_only_pr_set_and_worst_state_even_inside_cadence __
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+
+    def test_ticket_comments_track_only_pr_set_and_worst_state_even_inside_cadence(fx):
+        # intent: changed backlog membership or worst state updates the consumer ticket, without per-cycle comments.
+        red = add_pr(fx, 312, 4 * DAY)
+        add_pr(fx, 313, 3 * DAY, "success", mergeable=False)
+        fx.m.cycle()
+>       assert len(fx.issues) == 1 and fx.comments == []
+E       AssertionError: assert (0 == 1)
+E        +  where 0 = len([])
+E        +    where [] = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}}).issues
+
+ops/contract-sync/test_contract_lag_clock.py:164: AssertionError
+__________ test_pr_warning_and_critical_age_boundaries[7200-warning] ___________
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+age = 7200, severity = 'warning'
+
+    @pytest.mark.parametrize("age,severity", [(7199, None), (7200, "warning"), (86399, "warning"), (86400, "critical")])
+    def test_pr_warning_and_critical_age_boundaries(fx, age, severity):
+        # intent: open PR age, independent of Rails age, controls the two-hour and 24-hour thresholds.
+        add_pr(fx, 312, age)
+        result = fx.m.cycle()["findings"]
+        if severity is None:
+            assert result == [] and fx.slack == [] and fx.issues == []
+        else:
+>           assert len(result) == 1 and result[0]["severity"] == severity
+E           assert (0 == 1)
+E            +  where 0 = len([])
+
+ops/contract-sync/test_contract_lag_clock.py:189: AssertionError
+__________ test_pr_warning_and_critical_age_boundaries[86399-warning] __________
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+age = 86399, severity = 'warning'
+
+    @pytest.mark.parametrize("age,severity", [(7199, None), (7200, "warning"), (86399, "warning"), (86400, "critical")])
+    def test_pr_warning_and_critical_age_boundaries(fx, age, severity):
+        # intent: open PR age, independent of Rails age, controls the two-hour and 24-hour thresholds.
+        add_pr(fx, 312, age)
+        result = fx.m.cycle()["findings"]
+        if severity is None:
+            assert result == [] and fx.slack == [] and fx.issues == []
+        else:
+>           assert len(result) == 1 and result[0]["severity"] == severity
+E           assert (0 == 1)
+E            +  where 0 = len([])
+
+ops/contract-sync/test_contract_lag_clock.py:189: AssertionError
+_________ test_pr_warning_and_critical_age_boundaries[86400-critical] __________
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+age = 86400, severity = 'critical'
+
+    @pytest.mark.parametrize("age,severity", [(7199, None), (7200, "warning"), (86399, "warning"), (86400, "critical")])
+    def test_pr_warning_and_critical_age_boundaries(fx, age, severity):
+        # intent: open PR age, independent of Rails age, controls the two-hour and 24-hour thresholds.
+        add_pr(fx, 312, age)
+        result = fx.m.cycle()["findings"]
+        if severity is None:
+            assert result == [] and fx.slack == [] and fx.issues == []
+        else:
+>           assert len(result) == 1 and result[0]["severity"] == severity
+E           assert (0 == 1)
+E            +  where 0 = len([])
+
+ops/contract-sync/test_contract_lag_clock.py:189: AssertionError
+_ test_worst_state_is_order_independent_and_green_open_pr_still_lags[failure-False-RED] _
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+status = 'failure', mergeable = False, expected = 'RED'
+
+    @pytest.mark.parametrize("status,mergeable,expected", [
+        ("failure", False, "RED"), ("success", False, "CONFLICT"),
+        ("pending", True, "STALE"), ("success", True, "PENDING"),
+    ])
+    def test_worst_state_is_order_independent_and_green_open_pr_still_lags(fx, status, mergeable, expected):
+        # intent: every open sync PR keeps main behind, and the worst state wins regardless of API ordering.
+        add_pr(fx, 312, 4 * DAY, status, mergeable=mergeable)
+        add_pr(fx, 313, 600, "pending")
+        fx.prs.reverse()
+        result = fx.m.cycle()["findings"]
+>       assert len(result) == 1
+E       assert 0 == 1
+E        +  where 0 = len([])
+
+ops/contract-sync/test_contract_lag_clock.py:203: AssertionError
+_ test_worst_state_is_order_independent_and_green_open_pr_still_lags[success-False-CONFLICT] _
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+status = 'success', mergeable = False, expected = 'CONFLICT'
+
+    @pytest.mark.parametrize("status,mergeable,expected", [
+        ("failure", False, "RED"), ("success", False, "CONFLICT"),
+        ("pending", True, "STALE"), ("success", True, "PENDING"),
+    ])
+    def test_worst_state_is_order_independent_and_green_open_pr_still_lags(fx, status, mergeable, expected):
+        # intent: every open sync PR keeps main behind, and the worst state wins regardless of API ordering.
+        add_pr(fx, 312, 4 * DAY, status, mergeable=mergeable)
+        add_pr(fx, 313, 600, "pending")
+        fx.prs.reverse()
+        result = fx.m.cycle()["findings"]
+>       assert len(result) == 1
+E       assert 0 == 1
+E        +  where 0 = len([])
+
+ops/contract-sync/test_contract_lag_clock.py:203: AssertionError
+_ test_worst_state_is_order_independent_and_green_open_pr_still_lags[pending-True-STALE] _
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+status = 'pending', mergeable = True, expected = 'STALE'
+
+    @pytest.mark.parametrize("status,mergeable,expected", [
+        ("failure", False, "RED"), ("success", False, "CONFLICT"),
+        ("pending", True, "STALE"), ("success", True, "PENDING"),
+    ])
+    def test_worst_state_is_order_independent_and_green_open_pr_still_lags(fx, status, mergeable, expected):
+        # intent: every open sync PR keeps main behind, and the worst state wins regardless of API ordering.
+        add_pr(fx, 312, 4 * DAY, status, mergeable=mergeable)
+        add_pr(fx, 313, 600, "pending")
+        fx.prs.reverse()
+        result = fx.m.cycle()["findings"]
+>       assert len(result) == 1
+E       assert 0 == 1
+E        +  where 0 = len([])
+
+ops/contract-sync/test_contract_lag_clock.py:203: AssertionError
+_ test_worst_state_is_order_independent_and_green_open_pr_still_lags[success-True-PENDING] _
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+status = 'success', mergeable = True, expected = 'PENDING'
+
+    @pytest.mark.parametrize("status,mergeable,expected", [
+        ("failure", False, "RED"), ("success", False, "CONFLICT"),
+        ("pending", True, "STALE"), ("success", True, "PENDING"),
+    ])
+    def test_worst_state_is_order_independent_and_green_open_pr_still_lags(fx, status, mergeable, expected):
+        # intent: every open sync PR keeps main behind, and the worst state wins regardless of API ordering.
+        add_pr(fx, 312, 4 * DAY, status, mergeable=mergeable)
+        add_pr(fx, 313, 600, "pending")
+        fx.prs.reverse()
+        result = fx.m.cycle()["findings"]
+>       assert len(result) == 1
+E       assert 0 == 1
+E        +  where 0 = len([])
+
+ops/contract-sync/test_contract_lag_clock.py:203: AssertionError
+___________________ test_only_sync_prs_targeting_main_count ____________________
+
+fx = namespace(m=<module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contra...last_success': '2027-01-15T07:56:00Z', 'result': 'success', 'source_sha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+
+    def test_only_sync_prs_targeting_main_count(fx):
+        # intent: unrelated branches and sync PRs for release branches cannot create consumer-main lag.
+        fx.snapshot["rails"]["deployed_at"] = D.B._iso(NOW - 7200)
+        add_pr(fx, 312, 4 * DAY, base="release")
+        other = add_pr(fx, 313, 4 * DAY)
+        other["head"]["ref"] = "feature/contracts"
+>       assert fx.m.cycle()["findings"] == []
+E       AssertionError: assert [{'consumer':... 7200.0, ...}] == []
+E
+E         Left contains one more item: {'consumer': 'api-docs', 'classification': 'RED', 'severity': 'warning', 'age_s': 7200.0, ...}
+E         Use -v to get more diff
+
+ops/contract-sync/test_contract_lag_clock.py:214: AssertionError
+_______________ test_c3_twelve_red_prs_collapse_to_one_incident ________________
+
+m = <module 'contract_sync_pr_monitor' from '/Users/mav/mnt-data/projects/agent-infra/.claude/worktrees/contract-sync-lag-clock/ops/contract-sync/contract-sync-pr-monitor.py'>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7e35c2374350>
+tmp_path = PosixPath('/Users/mav/mnt-data/tmp/pytest-of-mav/pytest-840/test_c3_twelve_red_prs_collaps0')
+
+    def test_c3_twelve_red_prs_collapse_to_one_incident(m, monkeypatch, tmp_path):
+        # intent: one incident per consumer, not per PR. A dozen red sync PRs for
+        # gen-mcp-server produce one incident whose details carry all twelve PRs,
+        # one billed RCA, one Slack message and one consumer Plane ticket.
+        fx = _install(m, monkeypatch, tmp_path)
+        now = time.time()
+        snapshot = _snapshot(
+            deployed_at=now - 7200,
+            consumers=[_consumer("gen-mcp-server", [
+                _instance("gen-mcp-hosted@8090", contract_version="v8", contract_hash=SERVED_HASH,
+                          commits_behind=12),
+            ], deploy_at=now - 3600)],
+        )
+        entries = [_pr_entry(643 + i) for i in range(12)]
+        monkeypatch.setattr(m, "collect_snapshot", lambda: snapshot, raising=False)
+        monkeypatch.setattr(m, "collect_prs", lambda: {"gen-mcp-server": entries}, raising=False)
+
+        findings = _findings(m.cycle())
+
+        assert len(findings) == 1, findings
+        assert findings[0]["consumer"] == "gen-mcp-server"
+        assert len(findings[0]["details"]["prs"]) == 12
+        assert [entry["pr"]["number"] for entry in findings[0]["details"]["prs"]] == list(range(643, 655))
+
+>       assert fx.tickets == [], fx.tickets
+E       AssertionError: [('GEN/gen-mcp-server', 643, 'RED', 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'), ('GEN/gen-mcp-server', 644, 'RED', 'e...eeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'), ('GEN/gen-mcp-server', 648, 'RED', 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'), ...]
+E       assert [('GEN/gen-mc...eeeeee'), ...] == []
+E
+E         Left contains 12 more items, first extra item: ('GEN/gen-mcp-server', 643, 'RED', 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee')
+E         Use -v to get more diff
+
+ops/contract-sync/test_contract_lag.py:389: AssertionError
+=========================== short test summary info ============================
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_four_day_backlog_survives_recent_rails_and_pending_newest
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_pending_newest_turns_red_without_repost_or_new_ticket
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_recovery_requires_no_open_pr_and_prior_accepted_alert[True]
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_recovery_requires_no_open_pr_and_prior_accepted_alert[False]
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_three_hour_warning_escalates_at_24h_once
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_twelve_red_prs_create_one_consumer_ticket_and_preserve_legacy_rows
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_ticket_comments_track_only_pr_set_and_worst_state_even_inside_cadence
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_pr_warning_and_critical_age_boundaries[7200-warning]
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_pr_warning_and_critical_age_boundaries[86399-warning]
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_pr_warning_and_critical_age_boundaries[86400-critical]
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_worst_state_is_order_independent_and_green_open_pr_still_lags[failure-False-RED]
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_worst_state_is_order_independent_and_green_open_pr_still_lags[success-False-CONFLICT]
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_worst_state_is_order_independent_and_green_open_pr_still_lags[pending-True-STALE]
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_worst_state_is_order_independent_and_green_open_pr_still_lags[success-True-PENDING]
+FAILED ops/contract-sync/test_contract_lag_clock.py::test_only_sync_prs_targeting_main_count
+FAILED ops/contract-sync/test_contract_lag.py::test_c3_twelve_red_prs_collapse_to_one_incident
+16 failed, 1 passed in 0.19s

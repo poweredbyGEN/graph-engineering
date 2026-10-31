@@ -3,7 +3,7 @@
 
 The existing QA timer compares both active MCP units and deployed agentic with
 Rails main and production. Alerts deduplicate by consumer, with one bounded
-MiMo investigation and retained per-PR Plane mappings. The same entrypoint's
+MiMo investigation and one critical consumer Plane incident. The same entrypoint's
 --watchman mode runs from the existing gen-prod surface timer, detecting a dead
 QA timer independently. See docs/ops/CONTRACT-SYNC-MONITOR.md (GEN-11056).
 
@@ -110,6 +110,8 @@ SLACK_TOKEN = secret_value(os.environ.get("SLACK_BOT_TOKEN", ""), "value", "slac
 SLACK_CHANNEL = os.environ.get("SLACK_CHANNEL_ID", "C0AKUTQ4T1D").strip()
 
 STALE_HOURS = int(os.environ.get("STALE_HOURS", "2"))
+WARNING_HOURS = int(os.environ.get("WARNING_HOURS", "2"))
+CRITICAL_HOURS = int(os.environ.get("CRITICAL_HOURS", "24"))
 HTTP_TIMEOUT = 15  # every HTTP call: 15s or less
 
 
@@ -174,8 +176,17 @@ def plane_post(path: str, payload: dict[str, Any]) -> Any:
 
 
 def gitea_list_open_prs(repo: str) -> list[dict[str, Any]]:
-    data = gitea_get(f"/api/v1/repos/{repo}/pulls?state=open")
-    return data if isinstance(data, list) else []
+    # The oldest PR can be beyond the first page; an unreadable list is not recovery.
+    prs = []
+    page = 1
+    while True:
+        data = gitea_get(f"/api/v1/repos/{repo}/pulls?state=open&limit=50&page={page}")
+        if not isinstance(data, list):
+            raise ValueError("invalid_open_pr_list:" + repo)
+        prs.extend(data)
+        if not data:
+            return prs
+        page += 1
 
 
 def gitea_statuses(repo: str, sha: str) -> list[dict[str, Any]]:
@@ -196,6 +207,23 @@ def plane_create_issue(payload: dict[str, Any]) -> dict[str, Any]:
 def plane_create_comment(issue_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     path = f"/api/v1/workspaces/{PLANE_WORKSPACE}/projects/{PLANE_PROJECT_ID}/issues/{issue_id}/comments/"
     return plane_post(path, payload)
+
+
+def plane_ticket_issue_id(ticket_url: str) -> str:
+    # Older incidents store only a URL; resolve that exact ticket once, never replace it.
+    sequence_id = int(ticket_url.rstrip("/").rsplit("/", 1)[1])
+    if not PLANE_API_KEY:
+        raise RuntimeError("missing PLANE_API_KEY")
+    req = urllib.request.Request(
+        f"{PLANE_BASE}/api/v1/workspaces/{PLANE_WORKSPACE}/work-items/search/?search=GEN-{sequence_id}",
+        headers={"X-API-Key": PLANE_API_KEY, "User-Agent": "gen-monitor/1.0"},
+    )
+    with urllib.request.urlopen(req, timeout=remaining_timeout()) as response:
+        matches = [issue for issue in json.load(response)["issues"]
+                   if issue["sequence_id"] == sequence_id and issue["project_id"] == PLANE_PROJECT_ID]
+    if len(matches) != 1:
+        raise ValueError("consumer_ticket_not_unique:" + ticket_url)
+    return matches[0]["id"]
 
 
 def slack_post(text: str) -> None:
@@ -300,7 +328,7 @@ def fingerprint(repo: str, number: Any, head_sha: str, classification: str) -> s
 
 
 # --------------------------------------------------------------------------- #
-# Plane ticket bookkeeping (exactly one ticket per PR, comment on sha change).
+# Legacy PR ticket mappings remain readable; consumer tickets belong to incidents.
 # --------------------------------------------------------------------------- #
 def load_tickets() -> dict[str, Any]:
     try:
@@ -324,70 +352,6 @@ def issue_url(issue: dict[str, Any]) -> str:
     seq = issue.get("sequence_id")
     ident = str(seq) if seq is not None else str(issue.get("id"))
     return f"{PLANE_BASE}/gen/projects/{PLANE_PROJECT_ID}/issues/{ident}"
-
-
-def ticket_kind(classification: str) -> str:
-    if classification == "RED":
-        return "failing CI"
-    if classification == "CONFLICT":
-        return "not mergeable (conflict with the base branch)"
-    return "stale (CI pending or no status)"
-
-
-def ticket_description(repo: str, pr: dict[str, Any], classification: str, head_sha: str) -> str:
-    number = pr.get("number")
-    pr_url = str(pr.get("html_url") or "")
-    title = str(pr.get("title") or "")
-    kind = ticket_kind(classification)
-    return (
-        f"<p>The contract-sync bot opened PR <a href=\"{pr_url}\">{repo}#{number}</a> "
-        f"(\"{title}\") to sync backend contracts, and its CI is {kind}.</p>"
-        f"<p>Head sha: <code>{head_sha}</code>. The consumer repository stays out of date "
-        f"until this PR is fixed and merged.</p>"
-        f"<p>PR: {pr_url}</p>"
-    )
-
-
-def ticket_comment(repo: str, pr: dict[str, Any], classification: str, head_sha: str) -> str:
-    number = pr.get("number")
-    pr_url = str(pr.get("html_url") or "")
-    kind = ticket_kind(classification)
-    return (
-        f"<p>The head sha changed to <code>{head_sha}</code> and the PR is still {kind}. "
-        f"The consumer repository remains out of date. PR: {pr_url}</p>"
-    )
-
-
-def ensure_ticket(repo: str, pr: dict[str, Any], classification: str, head_sha: str) -> str | None:
-    number = pr.get("number")
-    pr_url = str(pr.get("html_url") or "") or f"{GITEA_BASE}/{repo}/pulls/{number}"
-    tickets = load_tickets()
-    entry = tickets.get(pr_url)
-    if entry is None:
-        try:
-            title_kind = "conflict" if classification == "CONFLICT" else "red"
-            issue = plane_create_issue({
-                "name": f"contract-sync PR {title_kind}: {repo}#{number}",
-                "description_html": ticket_description(repo, pr, classification, head_sha),
-            })
-            tickets[pr_url] = {"issue_id": issue.get("id"), "head_sha": head_sha, "url": issue_url(issue)}
-            save_tickets(tickets)
-            log(PROBE_LOG, f"repo={repo} pr={number} plane_ticket=created issue={issue.get('id')}")
-            return tickets[pr_url]["url"]
-        except Exception as exc:
-            log(ALERT_LOG, f"tier=PLANE channel=plane status=exc:{exc} repo={repo} pr={number} msg='ticket create failed'")
-            return None
-    if entry.get("head_sha") != head_sha:
-        try:
-            plane_create_comment(entry.get("issue_id"), {"comment_html": ticket_comment(repo, pr, classification, head_sha)})
-            entry["head_sha"] = head_sha
-            save_tickets(tickets)
-            log(PROBE_LOG, f"repo={repo} pr={number} plane_ticket=commented issue={entry.get('issue_id')}")
-        except Exception as exc:
-            log(ALERT_LOG, f"tier=PLANE channel=plane status=exc:{exc} repo={repo} pr={number} msg='ticket comment failed'")
-        return entry.get("url")
-    log(PROBE_LOG, f"repo={repo} pr={number} plane_ticket=existing issue={entry.get('issue_id')}")
-    return entry.get("url")
 
 
 # --------------------------------------------------------------------------- #
@@ -688,8 +652,10 @@ def rca_evidence(item: dict[str, Any]) -> dict[str, Any]:
     except FileNotFoundError:
         probe_tail = "probe_log_missing"
     return {"observation": item, "config": {"lag_grace_s": GRACE_S, "rca_timeout_s": 20,
-            "run_timeout_s": RUN_TIMEOUT_S, "deploy_grace_s": 300}, "probe_tail": probe_tail,
-            "monitor_source": inspect.getsource(lag_evaluations) + inspect.getsource(watchman_evaluations),
+            "run_timeout_s": RUN_TIMEOUT_S, "deploy_grace_s": 300,
+            "pr_warning_hours": WARNING_HOURS, "pr_critical_hours": CRITICAL_HOURS}, "probe_tail": probe_tail,
+            "monitor_source": inspect.getsource(lag_evaluations) + inspect.getsource(watchman_evaluations)
+                              + inspect.getsource(collect_prs) + inspect.getsource(cycle),
             "boundary": "Read-only evidence; advise only. Never merge, deploy or change customer data."}
 
 
@@ -705,6 +671,13 @@ def reconcile(evaluations: list[dict[str, Any]], now: float, *, held: set[str] |
         if consumer in active or consumer in (held or set()):
             continue
         entry = state[consumer]
+        # Empty PR membership closes the ticket's evidence as well as the alert.
+        if entry.get("ticket_summary", {}).get("prs") and not DRY_RUN:
+            plane_create_comment(entry["ticket_issue_id"], {
+                "comment_html": "<p>Contract consumer recovered: no open sync PRs remain; contract probe is healthy.</p>"})
+            entry["ticket_summary"] = {"prs": [], "classification": "RECOVERED"}
+            atomic_json(INCIDENTS_FILE, state)
+        # Only an accepted alert earns a recovery; held open PRs never reach here.
         if entry["posted"]:
             slack_post(f"STATUS: CONTRACT_SYNC_RECOVERED\nSERVICE: {consumer}\n"
                        "SELF_HEAL: verified contract probe recovered; no production mutation\n"
@@ -717,6 +690,28 @@ def reconcile(evaluations: list[dict[str, Any]], now: float, *, held: set[str] |
         entry = state.setdefault(consumer, {"posted": False, "posted_severity": None, "ticket_url": None})
         # PR changes and Rails heads are evidence, never incident keys (GEN-11056).
         fp = ap.fingerprint("contract-sync", consumer)
+        evidence = json.dumps(item, sort_keys=True)
+        prs = item["details"].get("prs", [])
+        # One consumer ticket owns the backlog; legacy per-PR tickets stay untouched.
+        summary = {"prs": sorted(p["pr"]["html_url"] for p in prs), "classification": item["classification"]}
+        if (item["severity"] == "critical" and consumer not in (held or set())
+                and entry["ticket_url"] is None and not DRY_RUN):
+            issue = plane_create_issue({"name": f"Contract consumer incident: {consumer}",
+                                        "description_html": "<pre>" + html.escape(evidence) + "</pre>"})
+            entry.update(ticket_url=issue_url(issue), ticket_issue_id=issue["id"], ticket_summary=summary)
+            atomic_json(INCIDENTS_FILE, state)
+        # Ticket evidence changes independently of Slack cadence; head/check churn is silent.
+        if ((prs or entry.get("ticket_summary", {}).get("prs")) and entry["ticket_url"]
+                and entry.get("ticket_summary") != summary and not DRY_RUN):
+            if not entry.get("ticket_issue_id"):
+                entry["ticket_issue_id"] = plane_ticket_issue_id(entry["ticket_url"])
+                atomic_json(INCIDENTS_FILE, state)
+            plane_create_comment(entry["ticket_issue_id"], {"comment_html": "<pre>" + html.escape(evidence) + "</pre>"})
+            entry["ticket_summary"] = summary
+            atomic_json(INCIDENTS_FILE, state)
+        # Young open PRs retain incident and ticket evidence without a notification.
+        if consumer in (held or set()):
+            continue
         # Policy records a decision before transport acceptance; a rejected
         # escalation must retain retry authority (GEN-11056).
         delivered = entry["posted"] and entry["posted_severity"] == item["severity"] and not DRY_RUN
@@ -726,18 +721,11 @@ def reconcile(evaluations: list[dict[str, Any]], now: float, *, held: set[str] |
         if not post:
             atomic_json(INCIDENTS_FILE, state)
             continue
-        evidence = json.dumps(item, sort_keys=True)
-        if item["severity"] == "critical" and entry["ticket_url"] is None and not DRY_RUN:
-            issue = plane_create_issue({"name": f"Contract consumer incident: {consumer}",
-                                        "description_html": "<pre>" + html.escape(evidence) + "</pre>"})
-            entry["ticket_url"] = issue_url(issue)
-            atomic_json(INCIDENTS_FILE, state)
         rca = "mimo_rca=skipped:dry_run" if DRY_RUN else POLICY.mimo_rca(rca_evidence(item), timeout=int(remaining_timeout(20)))
-        prs = item["details"].get("prs", [])
-        pr_lines = [f"#{p['pr']['number']} {p['pr']['html_url']} {p['classification']} checks="
-                    + json.dumps(p["failing"]) for p in prs]
+        # Slack carries every PR's identity and state; full check details stay in Plane/MiMo.
+        pr_lines = [f"#{p['pr']['number']} {p['pr']['html_url']} {p['classification']}" for p in prs]
         status = item["classification"].upper()
-        if status in ("RED", "CONFLICT", "STALE"):
+        if status in ("RED", "CONFLICT", "STALE", "PENDING"):
             status = "PR_" + status
         age_text = "unverified" if item["age_s"] is None else f"{item['age_s']:.0f}s ({item['age_s'] / 3600:.2f}h)"
         body = "\n".join([
@@ -745,35 +733,36 @@ def reconcile(evaluations: list[dict[str, Any]], now: float, *, held: set[str] |
             "SEVERITY: " + item["severity"], "AGE: " + age_text,
             "SURFACE: GEN creation cards and Vidsheets consumers",
             "SELF_HEAL: checked:no_safe_auto_fix_mapped; merging/deploying requires review",
-            "EVIDENCE: " + evidence, *pr_lines, "RCA: " + rca,
+            # Bound repeated JSON so the full PR state list and footer fit Slack's message limit.
+            "EVIDENCE: " + compact(evidence, 1200), *pr_lines, "RCA: " + rca,
             "NEXT: repair blocking sync checks and deploy the canonical contract; verify missing identity stamps",
             ap.post_decision(ap.DECISION_BUG if entry["ticket_url"] else "no safe fix, evidence attached, exact next step",
-                             entry["ticket_url"] or ("dry run; no ticket created" if DRY_RUN else "one consumer incident; six-hour escalation pending")),
+                             entry["ticket_url"] or ("dry run; no ticket created" if DRY_RUN else "one consumer incident; critical escalation pending")),
         ])
         slack_post(body + POLICY.footer(HOST, SCRIPT, str(ALERT_LOG), str(STATE_DIR)))
         entry["posted"] = not DRY_RUN
         entry["posted_severity"] = item["severity"] if not DRY_RUN else None
         atomic_json(INCIDENTS_FILE, state)
-    return evaluations
+    return [item for item in evaluations if item["consumer"] not in (held or set())]
 
 
 def collect_prs() -> dict[str, list[dict[str, Any]]]:
     grouped = {}
     for repo in REPOS:
         prs = [p for p in gitea_list_open_prs(repo)
-               if p["head"]["ref"].startswith(BRANCH_PREFIX)]
+               if p["head"]["ref"].startswith(BRANCH_PREFIX) and p["base"]["ref"] == "main"]
         with ThreadPoolExecutor(max_workers=6) as pool:
             statuses = list(pool.map(lambda p, repo=repo: gitea_statuses(repo, p["head"]["sha"]), prs))
         grouped[repo.split("/")[1]] = []
         for pr, checks in zip(prs, statuses):
             classification, failing = classify(pr, checks, STALE_HOURS)
-            if classification != "OK":
-                grouped[repo.split("/")[1]].append({
-                    "pr": {**{key: pr[key] for key in ("number", "html_url", "title", "created_at")},
-                           "head": {key: pr["head"][key] for key in ("ref", "sha")}},
-                    "classification": classification,
-                    "failing": [{key: check[key] for key in ("context", "status", "target_url")} for check in failing],
-                })
+            # Even green or pending PRs leave main behind until they merge.
+            grouped[repo.split("/")[1]].append({
+                "pr": {**{key: pr[key] for key in ("number", "html_url", "title", "created_at")},
+                       "head": {key: pr["head"][key] for key in ("ref", "sha")}},
+                "classification": "PENDING" if classification == "OK" else classification,
+                "failing": [{key: check[key] for key in ("context", "status", "target_url")} for check in failing],
+            })
     return grouped
 
 
@@ -787,22 +776,35 @@ def cycle() -> dict[str, Any]:
         evaluations = lag_evaluations(snapshot, now)
         by_consumer = {item["consumer"]: item for item in evaluations}
         held = {c["name"] for c in snapshot["consumers"] if deploy_quiet(c["deploy"], now)}
-        # Within Rails grace, PR failures remain evidence, not premature pages.
+        # Rails grace protects new work, never the consumer's older open backlog.
         grace = now - epoch(snapshot["rails"]["deployed_at"]) <= GRACE_S
         if grace:
             held.update(c["name"] for c in snapshot["consumers"] if any(
                 row["contract_hash"] != snapshot["rails"]["contract_hash"] for row in c["instances"]))
         for consumer, prs in grouped.items():
-            if consumer in held or not prs or grace:
+            if not prs:
                 continue
-            for item in prs:
-                ensure_ticket("GEN/" + consumer, item["pr"], item["classification"], item["pr"]["head"]["sha"])
+            # Unreadable deployed identity is a separate critical failure, not PR waiting time.
+            unverified = (consumer in by_consumer and by_consumer[consumer]["classification"]
+                          in ("identity_error", "missing_instances"))
+            # The oldest unmerged sync PR owns age; deployments cannot reset it.
+            age = max(0, now - min(epoch(p["pr"]["created_at"]) for p in prs))
+            if not unverified and (age < WARNING_HOURS * 3600 or (grace and age <= GRACE_S)):
+                held.add(consumer)
+            else:
+                held.discard(consumer)
+            # Every open PR is evidence, and the worst state wins regardless of API order.
+            priority = {"OK": 0, "PENDING": 0, "STALE": 1, "CONFLICT": 2, "RED": 3}
+            classification = max(prs, key=lambda p: priority[p["classification"]])["classification"]
             if consumer not in by_consumer:
-                incident = {"consumer": consumer, "classification": prs[0]["classification"],
-                            "severity": "warning", "age_s": now - epoch(snapshot["rails"]["deployed_at"]), "details": {"prs": prs}}
+                incident = {"consumer": consumer, "details": {}}
                 evaluations.append(incident)
                 by_consumer[consumer] = incident
-            by_consumer[consumer]["details"]["prs"] = prs
+            # Consumer age alone sets PR escalation; severity changes bypass repeat cadence.
+            if not unverified:
+                by_consumer[consumer].update(classification=classification, age_s=age,
+                                            severity="critical" if age >= CRITICAL_HOURS * 3600 else "warning")
+            by_consumer[consumer]["details"].update(prs=prs, pr_age_s=age, pr_classification=classification)
         findings = reconcile(evaluations, now, held=held)
         atomic_json(COMPLETE_FILE, {"completed_at": ts()})
         log(PROBE_LOG, f"result=complete consumers={len(findings)} remaining_s={int(remaining_timeout(480))}")

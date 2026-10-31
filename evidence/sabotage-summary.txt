@@ -1,0 +1,14 @@
+hide_unverified: caught exit=1
+omit_empty_set_comment: caught exit=1
+rails_clock: caught exit=1
+early_critical: caught exit=1
+drop_pending: caught exit=1
+reverse_priority: caught exit=1
+duplicate_ticket: caught exit=1
+skip_comment: caught exit=1
+lose_held: caught exit=1
+unposted_recovery: caught exit=1
+first_page_only: caught exit=1
+unbounded_payload: caught exit=1
+All 12 mutations caught; exact candidate bytes restored.
+Initial mutation selectors were corrected before confirming every failed guard.

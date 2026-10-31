@@ -6,6 +6,12 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Contract-sync PR incidents measure the oldest open consumer sync PR, escalate
+  at 24 hours, retain pending PRs through deploy grace, and use one consumer ticket
+  with comments only when backlog membership or the worst state changes.
+
 ### Added
 
 - Contract consumer lag alerts compare active MCP and agentic artifacts with deployed

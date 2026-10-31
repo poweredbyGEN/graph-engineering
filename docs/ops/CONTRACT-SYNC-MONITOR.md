@@ -21,11 +21,38 @@ from a version label or replaced by repository main. Agentic currently publishes
 neither an action contract_version nor a Rails producer stamp: report that typed
 identity gap alongside its actual wire-contract hash. Do not fabricate those fields.
 
-Lag grace is 60 minutes from the Rails deployment. This deliberately gives a new
-contract a full sync/CI/deploy window. A deployment of the consumer, or 300 seconds
-since deployd's latest attempt, suppresses notification without clearing an open
-incident. Critical escalation starts at six hours and opens one consumer Plane
-incident. Existing PR-to-ticket records remain separate evidence, not alert keys.
+Served-contract lag without open sync PRs has 60 minutes of Rails deployment grace
+and escalates at six hours. A deployment of that consumer, or 300 seconds since
+deployd's latest attempt, suppresses notification without clearing an open incident.
+
+For PR-backed consumers, every open `auto/contract-sync-` PR targeting `main`
+keeps the consumer behind, including green and pending checks. The monitor reads
+every page of open PRs; malformed or unreadable responses fail the cycle rather
+than pretending the backlog is empty. Age is the time since the oldest open PR's
+`created_at`, independent of Rails or consumer deployments. Classification is the
+worst state, `RED > CONFLICT > STALE > PENDING`, independent of API ordering.
+`WARNING_HOURS` defaults to 2 and `CRITICAL_HOURS` defaults to 24, each overridable
+through the monitor environment like `STALE_HOURS`. Rails grace holds only PRs
+younger than `CONTRACT_SYNC_LAG_GRACE_S`; older work keeps its clock and severity.
+Below the warning threshold an open backlog retains its incident silently.
+An unreadable or missing deployed identity remains independently critical; young
+PRs cannot conceal it. That finding retains its identity failure and carries the
+PR clock and worst state as `pr_age_s` and `pr_classification` evidence.
+
+Critical escalation opens one consumer Plane ticket through the existing incident
+path. Its issue ID and last successfully reported PR membership/worst state live
+alongside `ticket_url` in `incidents.json`. A later change to membership or worst
+state adds one comment, including during Slack cadence suppression or a quiet
+window; individual PR head/check changes do not. Legacy URL-only consumer records
+resolve the exact existing Plane ticket once before commenting. Existing per-PR
+`tickets.json` records remain readable and untouched; no new per-PR tickets are
+created. Recovery requires no open sync PRs and no remaining served-contract finding;
+only accepted alerts produce a recovery notification, once.
+
+This follows the published [oldest-unprocessed-item age metric](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-available-cloudwatch-metrics.html)
+and [stable alert identity](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/)
+patterns: producer activity does not reset waiting work, and changing observations
+update one consumer incident.
 The accepted notification severity is stored separately from policy decision time,
 so a rejected escalation remains eligible for retry. One stable consumer key controls notification; PR heads, failing check count and
 Rails main changes do not multiply alerts. A confirmed recovery resolves only an
