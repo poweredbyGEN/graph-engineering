@@ -1,0 +1,12 @@
+[Unit]
+Description=Conservative QA root disk cleanup
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/qa-docker-prune.sh
+TimeoutStartSec=15min
+Nice=19
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal
