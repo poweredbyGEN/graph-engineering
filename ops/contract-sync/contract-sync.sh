@@ -344,6 +344,15 @@ PY
 
 regen_gen_mcp_server() { # <consumer-clone> <backend-clone>
   local clone="$1" backend="$2" script
+  # A checkout that prepares its Rails contracts from its own pinned producer revision
+  # (tests/refresh_live_contract_fixture.py) reads them live: a backend change cannot alter
+  # its artifacts, and its catalog regeneration needs the CI-prepared .ci-rails-contracts/
+  # this box never builds, so running it fails on every tick and holds the shared
+  # checkpoint (GEN-13143). Skip it the way a repo without a regeneration command is skipped.
+  if [ -f "$clone/tests/refresh_live_contract_fixture.py" ]; then
+    SKIP_REASON="reads Rails contracts live from its own pinned revision; a backend change cannot alter its artifacts"
+    return 20
+  fi
   # scripts/refresh_contracts.py re-vendors AND moves the pins that must change
   # with the artifacts (action-schema hash, catalog record, rc09 tool cards).
   # Vendoring alone leaves the sync PR red (GEN-8145). The pins need the

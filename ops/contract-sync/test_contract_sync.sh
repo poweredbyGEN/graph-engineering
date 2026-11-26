@@ -624,6 +624,30 @@ assert_equal "T10 the later script never ran" "0" \
   "$([ -f "$STATE_DIR/gen-mcp-server/LAST_SCRIPT_RAN" ] && echo 1 || echo 0)"
 assert_equal "T10 state did not advance" "$state_before" "$(state_sha)"
 
+# T10b — a gen-mcp-server that reads Rails contracts live is skipped, not run: its catalog
+# regeneration needs fixtures only its own CI builds, so running it would fail every tick and
+# hold the all-consumer checkpoint (GEN-13143). The failing scripts above must not run.
+printf 'T10b a live-reading gen-mcp-server is skipped\n'
+mkdir -p "$MCP_WORK/tests"
+: >"$MCP_WORK/tests/refresh_live_contract_fixture.py"
+commit_all "$MCP_WORK" "mcp reads Rails contracts live"
+git -C "$MCP_WORK" push -q origin main
+rm -rf "$STATE_DIR/gen-mcp-server"
+rc=0
+CONTRACT_SYNC_STATE_DIR="$STATE_DIR" \
+  CONTRACT_SYNC_GIT_BASE="$GIT_BASE" \
+  CONTRACT_SYNC_OWNER="$OWNER" \
+  CONTRACT_SYNC_BACKEND_URL="$BE_URL" \
+  CONTRACT_SYNC_CONSUMERS="gen-mcp-server" \
+  DRY_RUN=1 \
+  bash "$SYNC" >"$LIVE_OUT" 2>&1 || rc=$?
+out="$(cat "$LIVE_OUT")"
+assert_equal "T10b the run succeeds" "0" "$rc"
+assert_contains "T10b names the skip" "$out" "gen-mcp-server: skipped"
+assert_not_contains "T10b no regeneration error" "$out" "gen-mcp-server: ERROR"
+assert_equal "T10b no vendor script ran" "0" \
+  "$([ -f "$STATE_DIR/gen-mcp-server/LAST_SCRIPT_RAN" ] && echo 1 || echo 0)"
+
 # -----------------------------------------------------------------------------
 # T11 — a PR whose checks are still pending is not abandoned: the state stays
 # put and the next tick re-checks the same open PR and merges it once green.
