@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize("case", ["T1", "T2", "T3", "T4", "T5", "T6", "T8"])
+@pytest.mark.parametrize("case", ["T1", "T2", "T3", "T4", "T5", "T6", "T8", "T9"])
 def test_ci_fetch_pinned(case):
     # intent: a broken transport contract must fail the same pytest command used by both gates.
     subprocess.run(

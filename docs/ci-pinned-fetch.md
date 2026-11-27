@@ -23,7 +23,7 @@ Both hosts resolved A and AAAA addresses. IPv4 HTTPS returned 200; forced IPv6 f
 
 ## Contract
 
-`ci-fetch-pinned <GEN repo name> <40-character lowercase SHA> <destination>` requires `GEN_GITEA_READ_TOKEN` and the existing CI Bash, Git and GNU timeout commands. Success is exit 0 and a detached destination HEAD equal to the requested SHA; stdout names each attempt and ends in `attempt N/3 ok`. The fetch object is checked before checkout and HEAD is checked afterward. No branch, alternate host, archive, model, or stale checkout substitutes for the pin. Each step owns its destination.
+`ci-fetch-pinned <[GEN/|infra/]repo> <40-character lowercase SHA> <destination>` (bare `<repo>` defaults to `GEN/<repo>`) requires `GEN_GITEA_READ_TOKEN` and the existing CI Bash, Git and GNU timeout commands. Success is exit 0 and a detached destination HEAD equal to the requested SHA; stdout names each attempt and ends in `attempt N/3 ok`. The fetch object is checked before checkout and HEAD is checked afterward. No branch, alternate host, archive, model, or stale checkout substitutes for the pin. Each step owns its destination.
 
 Git/libcurl aborts below 1000 bytes/s for 30 seconds. Each fetch also runs under GNU timeout30s with a5s kill grace, covering DNS/TCP/TLS before HTTP progress detection applies. There are at most three fetch attempts, with pauses of 5 and 15 seconds. Three fully stalled attempts finish in about 110 seconds; the30s attempt cap also ends progressing transfers over30s. That explicit limit is required while the deployed Git lacks a connection-only timeout setting. Never claim lowSpeedTime bounds a TLS handshake.
 

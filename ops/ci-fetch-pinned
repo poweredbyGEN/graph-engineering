@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
-# CLI v1: ci-fetch-pinned <GEN repo name> <full commit SHA> <destination>.
+# CLI v1: ci-fetch-pinned <[GEN/|infra/]repo> <full commit SHA> <destination>.
 set -eu
 if [ "$#" -ne 3 ]; then
   echo 'PINNED_FETCH_INPUT expected repo sha dest' >&2; exit 1
 fi
 repo=$1 sha=$2 dest=$3
-if [[ ! $repo =~ ^[a-zA-Z0-9_-]+$ || ! $sha =~ ^[0-9a-f]{40}$ || -z $dest ]]; then
+if [[ $repo =~ ^(GEN|infra)/[a-zA-Z0-9_-]+$ ]]; then
+  repo_path=$repo
+elif [[ $repo =~ ^[a-zA-Z0-9_-]+$ ]]; then
+  repo_path="GEN/$repo"
+else
+  echo 'PINNED_FETCH_INPUT expected repo full-sha nonempty-dest' >&2; exit 1
+fi
+if [[ ! $sha =~ ^[0-9a-f]{40}$ || -z $dest ]]; then
   echo 'PINNED_FETCH_INPUT expected repo full-sha nonempty-dest' >&2; exit 1
 fi
 if [ -z "${GEN_GITEA_READ_TOKEN:-}" ]; then
@@ -24,7 +31,7 @@ mkdir -p "$dest"
 git -C "$dest" init --quiet
 for attempt in 1 2 3; do
   printf 'ci-fetch-pinned %s %s attempt %s/3 start\n' "$repo" "$sha" "$attempt"
-  if timeout --kill-after=5s 30s git -C "$dest" fetch --quiet --depth 1 "https://git.gen.pro/GEN/$repo.git" "$sha" 2>"$log"; then
+  if timeout --kill-after=5s 30s git -C "$dest" fetch --quiet --depth 1 "https://git.gen.pro/$repo_path.git" "$sha" 2>"$log"; then
     # Fetch exit zero is insufficient: both the fetched object and detached checkout must be the pin.
     # Every sibling-source consumer extends this helper; never substitute a branch or cached checkout.
     if [ "$(git -C "$dest" rev-parse FETCH_HEAD)" != "$sha" ] ||

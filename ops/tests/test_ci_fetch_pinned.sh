@@ -14,8 +14,9 @@ def check(case):
     # intent: retries never change the requested revision; permanent failures consume one attempt.
     with tempfile.TemporaryDirectory() as scratch:
         root = pathlib.Path(scratch)
-        repo = root/'GEN/gen-mcp-server.git'
-        repo.parent.mkdir()
+        repo_arg = 'infra/util-scripts' if case == 'T9' else 'gen-mcp-server'
+        repo = root / (f'{repo_arg}.git' if '/' in repo_arg else f'GEN/{repo_arg}.git')
+        repo.parent.mkdir(parents=True, exist_ok=True)
         git('init','-q',repo)
         git('-C',repo,'config','user.name','fixture')
         git('-C',repo,'config','user.email','fixture@example.invalid')
@@ -82,18 +83,24 @@ def check(case):
         requested='1'*40 if case=='T4' else sha
         dest=root/'dest'; started=time.monotonic()
         try:
-            p=subprocess.run([str(helper),'gen-mcp-server',requested,str(dest)],env=env,capture_output=True,text=True,timeout=175)
+            p=subprocess.run([str(helper),repo_arg,requested,str(dest)],env=env,capture_output=True,text=True,timeout=175)
             elapsed=time.monotonic()-started
-            expected={'T3':f'PINNED_FETCH_STALLED gen-mcp-server {sha} after 3 attempts',
-                      'T8':f'PINNED_FETCH_STALLED gen-mcp-server {sha} after 3 attempts',
-                      'T4':f'PINNED_FETCH_MISSING gen-mcp-server {requested}',
+            expected={'T3':f'PINNED_FETCH_STALLED {repo_arg} {sha} after 3 attempts',
+                      'T8':f'PINNED_FETCH_STALLED {repo_arg} {sha} after 3 attempts',
+                      'T4':f'PINNED_FETCH_MISSING {repo_arg} {requested}',
                       'T5':'PINNED_FETCH_MISMATCH','T6':'PINNED_FETCH_AUTH'}
-            if case in ('T1','T2'):
+            if case in ('T1','T2','T9'):
                 assert p.returncode==0,(p.stdout,p.stderr)
                 assert git('-C',dest,'rev-parse','HEAD',text=True).strip()==sha
-                assert state['attempts']==2,state
-                assert 'attempt 2/3 ok' in p.stdout,p.stdout
+                expected_attempts=1 if case=='T9' else 2
+                assert state['attempts']==expected_attempts,state
+                assert f'attempt {expected_attempts}/3 ok' in p.stdout,p.stdout
                 if case=='T1': assert elapsed<55,elapsed
+                if case=='T9':
+                    bad=subprocess.run([str(helper),'other/util-scripts',requested,str(root/'bad')],env=env,capture_output=True,text=True,timeout=30)
+                    assert bad.returncode==1,(bad.stdout,bad.stderr)
+                    assert 'PINNED_FETCH_INPUT' in bad.stderr,bad.stderr
+                    assert state['attempts']==1,state
             else:
                 assert p.returncode==1,(p.returncode,p.stdout,p.stderr)
                 assert expected[case] in p.stderr,p.stderr
@@ -106,6 +113,6 @@ def check(case):
             print(f'{case} PASS attempts={state["attempts"]} elapsed={elapsed:.2f}s',flush=True)
         finally: stopped.set(); server.shutdown(); server.server_close()
 
-for case in selected or ['T1','T2','T3','T4','T5','T6','T8']:
+for case in selected or ['T1','T2','T3','T4','T5','T6','T8','T9']:
     check(case)
 PY
