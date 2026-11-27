@@ -2,7 +2,7 @@
 # The smart-HTTP peer is real Git; only the fault at the transport/process boundary is injected.
 set -eu
 python3 - "$(cd "$(dirname "$0")/../.." && pwd)/ops/ci-fetch-pinned" "$@" <<'PY'
-import http.server, os, pathlib, socket, subprocess, sys, tempfile, threading, time
+import http.server, os, pathlib, socket, socketserver, subprocess, sys, tempfile, threading, time
 
 helper = pathlib.Path(sys.argv[1]).resolve()
 selected = sys.argv[2:]
@@ -55,10 +55,22 @@ def check(case):
                 self.send_header('Content-Length',str(len(body))); self.end_headers()
                 try: self.wfile.write(body)
                 except (BrokenPipeError,ConnectionResetError): pass
-        server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Peer)
+        stopped=threading.Event()
+        class StalledTLS(socketserver.BaseRequestHandler):
+            def handle(self):
+                state['attempts']+=1
+                state.setdefault('accepted_at',[]).append(time.monotonic())
+                stopped.wait(175)
+        if case=='T8':
+            class TLSPeer(socketserver.ThreadingTCPServer):
+                daemon_threads=True
+            server=TLSPeer(('127.0.0.1',0),StalledTLS)
+        else:
+            server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Peer)
         threading.Thread(target=server.serve_forever,daemon=True).start()
         config=root/'gitconfig'
-        config.write_text('[url "http://127.0.0.1:%d/"]\n insteadOf = https://git.gen.pro/\n' % server.server_port)
+        scheme='https' if case=='T8' else 'http'
+        config.write_text('[url "%s://127.0.0.1:%d/"]\n insteadOf = https://git.gen.pro/\n' % (scheme,server.server_address[1]))
         env=dict(os.environ,GIT_CONFIG_GLOBAL=str(config),GIT_CONFIG_NOSYSTEM='1',GEN_GITEA_READ_TOKEN='fixture-token')
         if case=='T5':
             # Git rejects an invalid pack itself. Inject a successful wrong fetch at the Git boundary
@@ -73,6 +85,7 @@ def check(case):
             p=subprocess.run([str(helper),'gen-mcp-server',requested,str(dest)],env=env,capture_output=True,text=True,timeout=175)
             elapsed=time.monotonic()-started
             expected={'T3':f'PINNED_FETCH_STALLED gen-mcp-server {sha} after 3 attempts',
+                      'T8':f'PINNED_FETCH_STALLED gen-mcp-server {sha} after 3 attempts',
                       'T4':f'PINNED_FETCH_MISSING gen-mcp-server {requested}',
                       'T5':'PINNED_FETCH_MISMATCH','T6':'PINNED_FETCH_AUTH'}
             if case in ('T1','T2'):
@@ -84,11 +97,15 @@ def check(case):
             else:
                 assert p.returncode==1,(p.returncode,p.stdout,p.stderr)
                 assert expected[case] in p.stderr,p.stderr
-                assert state['attempts']==(3 if case=='T3' else 1),state
-                if case=='T3': assert 100<=elapsed<180,elapsed
+                assert state['attempts']==(3 if case in ('T3','T8') else 1),state
+                if case in ('T3','T8'): assert 100<=elapsed<180,elapsed
+                if case=='T8':
+                    a,b,c=state['accepted_at']
+                    durations=[b-a-5,c-b-15,time.monotonic()-c]
+                    assert all(29<=duration<35 for duration in durations),durations
             print(f'{case} PASS attempts={state["attempts"]} elapsed={elapsed:.2f}s',flush=True)
-        finally: server.shutdown(); server.server_close()
+        finally: stopped.set(); server.shutdown(); server.server_close()
 
-for case in selected or ['T1','T2','T3','T4','T5','T6']:
+for case in selected or ['T1','T2','T3','T4','T5','T6','T8']:
     check(case)
 PY
