@@ -2,7 +2,7 @@
 # The smart-HTTP peer is real Git; only the fault at the transport/process boundary is injected.
 set -eu
 python3 - "$(cd "$(dirname "$0")/../.." && pwd)/ops/ci-fetch-pinned" "$@" <<'PY'
-import http.server, os, pathlib, socket, socketserver, subprocess, sys, tempfile, threading, time
+import http.server, os, pathlib, shutil, socket, socketserver, subprocess, sys, tempfile, threading, time
 
 helper = pathlib.Path(sys.argv[1]).resolve()
 selected = sys.argv[2:]
@@ -73,6 +73,12 @@ def check(case):
         scheme='https' if case=='T8' else 'http'
         config.write_text('[url "%s://127.0.0.1:%d/"]\n insteadOf = https://git.gen.pro/\n' % (scheme,server.server_address[1]))
         env=dict(os.environ,GIT_CONFIG_GLOBAL=str(config),GIT_CONFIG_NOSYSTEM='1',GEN_GITEA_READ_TOKEN='fixture-token')
+        if case=='T8':
+            # intent: a pre-HTTP TLS hang keeps the 600s outer guard; accelerate only its clock.
+            bindir=root/'bin'; bindir.mkdir()
+            wrapper=bindir/'timeout'
+            wrapper.write_text('#!'+sys.executable+'\nimport os, sys\nassert sys.argv[1:3] == ["--kill-after=5s", "600s"], sys.argv\nos.execv('+repr(shutil.which('timeout'))+', ["timeout", "--kill-after=5s", "1s", *sys.argv[3:]])\n')
+            wrapper.chmod(0o755); env['PATH']=str(bindir)+':'+env['PATH']
         if case=='T5':
             # Git rejects an invalid pack itself. Inject a successful wrong fetch at the Git boundary
             # to prove the helper also refuses stale/wrong FETCH_HEAD rather than trusting exit zero.
@@ -105,11 +111,12 @@ def check(case):
                 assert p.returncode==1,(p.returncode,p.stdout,p.stderr)
                 assert expected[case] in p.stderr,p.stderr
                 assert state['attempts']==(3 if case in ('T3','T8') else 1),state
-                if case in ('T3','T8'): assert 100<=elapsed<180,elapsed
+                if case=='T3': assert 100<=elapsed<180,elapsed
                 if case=='T8':
+                    assert 22<=elapsed<30,elapsed
                     a,b,c=state['accepted_at']
                     durations=[b-a-5,c-b-15,time.monotonic()-c]
-                    assert all(29<=duration<35 for duration in durations),durations
+                    assert all(0.5<=duration<2 for duration in durations),durations
             print(f'{case} PASS attempts={state["attempts"]} elapsed={elapsed:.2f}s',flush=True)
         finally: stopped.set(); server.shutdown(); server.server_close()
 

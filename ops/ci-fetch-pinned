@@ -22,16 +22,16 @@ export GIT_TERMINAL_PROMPT=0 LC_ALL=C
 export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=http.extraHeader
 export GIT_CONFIG_VALUE_0="Authorization: token $GEN_GITEA_READ_TOKEN"
 export GIT_CONFIG_KEY_1=http.userAgent GIT_CONFIG_VALUE_1=gen-build-gate
-# Low-speed detection covers HTTP bodies; the attempt cap also covers DNS and TLS handshakes.
-# shortcut: a fetch progressing beyond 30 seconds retries; use a Git connection-only timeout when supported.
-export GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=30
+# Retry transfers with no bytes for 30 seconds; elapsed transfer time alone is not a stall.
+export GIT_HTTP_LOW_SPEED_LIMIT=1 GIT_HTTP_LOW_SPEED_TIME=30
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 mkdir -p "$dest"
 git -C "$dest" init --quiet
 for attempt in 1 2 3; do
   printf 'ci-fetch-pinned %s %s attempt %s/3 start\n' "$repo" "$sha" "$attempt"
-  if timeout --kill-after=5s 30s git -C "$dest" fetch --quiet --depth 1 "https://git.gen.pro/$repo_path.git" "$sha" 2>"$log"; then
+  # The generous outer bound catches hung DNS/TLS before HTTP low-speed detection applies.
+  if timeout --kill-after=5s 600s git -C "$dest" fetch --quiet --depth 1 "https://git.gen.pro/$repo_path.git" "$sha" 2>"$log"; then
     # Fetch exit zero is insufficient: both the fetched object and detached checkout must be the pin.
     # Every sibling-source consumer extends this helper; never substitute a branch or cached checkout.
     if [ "$(git -C "$dest" rev-parse FETCH_HEAD)" != "$sha" ] ||
